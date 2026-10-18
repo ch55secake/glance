@@ -2,18 +2,19 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
-	if err := run(os.Stdout); err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "glance:", err)
 		os.Exit(1)
 	}
 }
 
-func run(out io.Writer) error {
-	_, err := fmt.Fprintln(out, "glance: GitHub dashboard under development")
+func run() error {
+	_, err := tea.NewProgram(initialModel(), tea.WithAltScreen()).Run()
 	return err
 }

@@ -9,16 +9,19 @@ yet.
 
 - Go 1.26 or newer
 
-## Build and run
+## Run
 
 ```sh
 go run ./cmd/glance
 ```
 
-Build all packages with:
+The initial TUI is a placeholder shell. Use the left/right arrow keys or `h`/`l`
+to switch sections, and `q` to quit. GitHub data loading is not implemented yet.
+
+Build the executable with:
 
 ```sh
-go build ./...
+go build -o bin/glance ./cmd/glance
 ```
 
 ## Checks
