@@ -1,0 +1,16 @@
+# Go build output
+/glance
+/bin/
+/dist/
+*.test
+coverage.out
+
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/

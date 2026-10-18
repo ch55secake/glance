@@ -1,0 +1,20 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ch55secake/cheesecake-factory/.github/workflows/release.yml@92e4441efa5a11f9c3f704a5ce48cf752cde38de
+    with:
+      binary-name: glance
+      build-package: ./cmd/glance
+      cgo-enabled: '0'
+      targets: '[{"goos":"linux","goarch":"amd64"},{"goos":"linux","goarch":"arm64"},{"goos":"darwin","goarch":"amd64"},{"goos":"darwin","goarch":"arm64"}]'
+    permissions:
+      contents: write

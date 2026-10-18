@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-build.yml@main
+
+  lint:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-lint.yml@main
+
+  vuln:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-vuln.yml@main
