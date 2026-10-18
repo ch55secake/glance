@@ -14,19 +14,3 @@ jobs:
 
   lint:
     uses: ch55secake/cheesecake-factory/.github/workflows/go-lint.yml@main
-
-  checks:
-    name: checks
-    if: ${{ always() }}
-    needs: [build, lint]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require reusable checks to pass
-        env:
-          BUILD_RESULT: ${{ needs.build.result }}
-          LINT_RESULT: ${{ needs.lint.result }}
-        run: |
-          if [ "$BUILD_RESULT" != "success" ] || [ "$LINT_RESULT" != "success" ]; then
-            echo "Build result: $BUILD_RESULT; lint result: $LINT_RESULT"
-            exit 1
-          fi
