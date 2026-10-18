@@ -1,9 +1,3 @@
-## Summary
+## Description
 
-<!-- What changed and why? -->
-
-## Verification
-
-- [ ] `go test ./...`
-- [ ] `go vet ./...`
-- [ ] `go build ./...`
+## Changes in this pull request

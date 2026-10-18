@@ -9,32 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  build:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-build.yml@main
+
+  lint:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-lint.yml@main
+
   checks:
     name: checks
+    if: ${{ always() }}
+    needs: [build, lint]
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Check formatting
+      - name: Require reusable checks to pass
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
         run: |
-          files=$(gofmt -l .)
-          if [ -n "$files" ]; then
-            printf 'Files need gofmt:\n%s\n' "$files"
+          if [ "$BUILD_RESULT" != "success" ] || [ "$LINT_RESULT" != "success" ]; then
+            echo "Build result: $BUILD_RESULT; lint result: $LINT_RESULT"
             exit 1
           fi
-
-      - name: Test
-        run: go test ./...
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Build
-        run: go build ./...
