@@ -1,14 +1,15 @@
 # Protecting `main`
 
-Branch rules are a GitHub repository setting and cannot take effect until this
-project has a GitHub repository. Once the repository exists, create a branch
-ruleset in **Settings → Rules → Rulesets** with these settings:
+Branch protection is configured in GitHub, not by files in this repository.
+The `main` branch currently has these protections:
 
-- Target branch: `main`
-- Require a pull request before merging (no approval count required for now)
-- Require the `checks` status check from the `CI` workflow
+- Require pull requests before merging (no approval count required)
+- Require the `checks` status check from the `CI` workflow and require the
+  branch to be up to date
 - Block force pushes
 - Block branch deletion
-- Enforce the rules for administrators as well
+- Enforce the rules for administrators
 
-The `checks` job is provided by [`.github/workflows/ci.yml`](workflows/ci.yml).
+To reproduce these protections in another repository, create an active branch
+ruleset in **Settings → Rules → Rulesets** targeting `main`. The `checks` job is
+provided by [`.github/workflows/ci.yml`](workflows/ci.yml).
