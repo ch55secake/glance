@@ -1,8 +1,11 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"glance/internal/githubapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -48,9 +51,48 @@ func TestQuitKey(t *testing.T) {
 
 func TestViewShowsDashboardAndPlaceholder(t *testing.T) {
 	view := initialModel().View()
-	for _, want := range []string{"glance", "Overview", "Pull requests", "Welcome to glance", "GitHub data integration is not implemented yet."} {
+	for _, want := range []string{"glance", "Overview", "Pull requests", "Welcome to glance", "Connecting to GitHub..."} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view %q does not contain %q", view, want)
 		}
+	}
+}
+
+func TestViewerIsShownInOverview(t *testing.T) {
+	m := initialModel()
+	updated, cmd := m.Update(viewerLoadedMsg{viewer: githubapi.User{Login: "octocat"}})
+	if cmd != nil {
+		t.Fatal("viewer result unexpectedly returned a command")
+	}
+
+	view := updated.(model).View()
+	if !strings.Contains(view, "Connected as @octocat") {
+		t.Errorf("view %q does not show the authenticated user", view)
+	}
+}
+
+func TestGitHubAPIErrorIsShownInOverview(t *testing.T) {
+	m := initialModel()
+	updated, cmd := m.Update(viewerLoadedMsg{err: errors.New("GitHub API is unavailable")})
+	if cmd != nil {
+		t.Fatal("viewer error unexpectedly returned a command")
+	}
+
+	view := updated.(model).View()
+	if !strings.Contains(view, "GitHub API is unavailable") {
+		t.Errorf("view %q does not show the API error", view)
+	}
+}
+
+func TestMissingTokenIsShownInOverview(t *testing.T) {
+	t.Setenv(githubapi.TokenEnvVar, "")
+	msg := loadViewer().(viewerLoadedMsg)
+	if !errors.Is(msg.err, githubapi.ErrMissingToken) {
+		t.Fatalf("loadViewer() error = %v, want %v", msg.err, githubapi.ErrMissingToken)
+	}
+
+	updated, _ := initialModel().Update(msg)
+	if view := updated.(model).View(); !strings.Contains(view, githubapi.TokenEnvVar) {
+		t.Errorf("view %q does not explain how to configure authentication", view)
 	}
 }
