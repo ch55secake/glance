@@ -14,3 +14,6 @@ jobs:
 
   lint:
     uses: ch55secake/cheesecake-factory/.github/workflows/go-lint.yml@main
+
+  vuln:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-vuln.yml@main
