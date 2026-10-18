@@ -1,6 +1,11 @@
 package main
 
 import (
+	"context"
+	"time"
+
+	"glance/internal/githubapi"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -20,20 +25,36 @@ var (
 type model struct {
 	width         int
 	activeSection int
+	loading       bool
+	viewer        githubapi.User
+	apiError      string
+}
+
+type viewerLoadedMsg struct {
+	viewer githubapi.User
+	err    error
 }
 
 func initialModel() model {
-	return model{width: 80}
+	return model{width: 80, loading: true}
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return loadViewer
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+	case viewerLoadedMsg:
+		m.loading = false
+		m.apiError = ""
+		if msg.err != nil {
+			m.apiError = msg.err.Error()
+		} else {
+			m.viewer = msg.viewer
+		}
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -46,6 +67,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func loadViewer() tea.Msg {
+	client, err := githubapi.NewClientFromEnv()
+	if err != nil {
+		return viewerLoadedMsg{err: err}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	viewer, err := client.Viewer(ctx)
+	return viewerLoadedMsg{viewer: viewer, err: err}
 }
 
 func (m model) View() string {
@@ -84,7 +118,17 @@ func (m model) View() string {
 func (m model) sectionContent() string {
 	switch m.activeSection {
 	case 0:
-		return "Welcome to glance\nYour GitHub dashboard starts here.\n\nGitHub data integration is not implemented yet."
+		content := "Welcome to glance"
+		switch {
+		case m.loading:
+			return content + "\n\nConnecting to GitHub..."
+		case m.apiError != "":
+			return content + "\n\n" + m.apiError
+		case m.viewer.Login != "":
+			return content + "\n\nConnected as @" + m.viewer.Login + ".\nPull request views are coming next."
+		default:
+			return content + "\n\nSet GLANCE_GITHUB_TOKEN to connect to GitHub."
+		}
 	case 1:
 		return "No pull requests loaded yet."
 	case 2:
