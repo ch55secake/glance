@@ -139,7 +139,7 @@ func (c *Client) ListPullRequests(ctx context.Context, owner, repository string)
 	}
 }
 
-func (c *Client) getJSON(ctx context.Context, endpoint string, query url.Values, result any) error {
+func (c *Client) getJSON(ctx context.Context, endpoint string, query url.Values, result any) (resultErr error) {
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
 		return fmt.Errorf("parse GitHub API base URL: %w", err)
@@ -159,7 +159,11 @@ func (c *Client) getJSON(ctx context.Context, endpoint string, query url.Values,
 	if err != nil {
 		return fmt.Errorf("request GitHub API: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil && resultErr == nil {
+			resultErr = fmt.Errorf("close GitHub API response: %w", err)
+		}
+	}()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return decodeAPIError(response)
