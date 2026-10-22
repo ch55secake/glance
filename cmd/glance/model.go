@@ -5,24 +5,14 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"glance/internal/githubapi"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 var sections = []string{"Overview", "Pull requests", "Issues", "Notifications"}
-
-var (
-	titleStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	mutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	activeTabStyle = lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.Color("229")).Background(lipgloss.Color("62")).Padding(0, 1)
-	inactiveTabStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Padding(0, 1)
-	panelStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("62")).Padding(1, 2)
-)
 
 const dashboardLoadTimeout = 2 * time.Minute
 
@@ -35,14 +25,28 @@ type model struct {
 	apiError      string
 	pullRequests  []githubapi.PullRequest
 	selectedPR    int
+	filter        prFilter
+	query         string
+	searching     bool
+	showHelp      bool
+	requestID     int
 	client        *githubapi.Client
 }
 
 type dashboardLoadedMsg struct {
+	requestID    int
 	viewer       githubapi.User
 	pullRequests []githubapi.PullRequest
 	err          error
 }
+
+type prFilter int
+
+const (
+	allPRs prFilter = iota
+	minePRs
+	draftPRs
+)
 
 func initialModel() model {
 	return model{width: 80, height: 24, loading: true, client: githubapi.NewClient()}
@@ -59,10 +63,10 @@ func (m model) loadDashboard() tea.Cmd {
 
 		viewer, err := m.client.Viewer(ctx)
 		if err != nil {
-			return dashboardLoadedMsg{err: err}
+			return dashboardLoadedMsg{requestID: m.requestID, err: err}
 		}
 		pullRequests, err := m.client.ListOpenPullRequests(ctx)
-		return dashboardLoadedMsg{viewer: viewer, pullRequests: pullRequests, err: err}
+		return dashboardLoadedMsg{requestID: m.requestID, viewer: viewer, pullRequests: pullRequests, err: err}
 	}
 }
 
@@ -72,15 +76,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case dashboardLoadedMsg:
+		if msg.requestID != m.requestID {
+			break
+		}
+		selected := m.selectedKey()
 		m.loading = false
 		m.apiError = ""
 		m.viewer = msg.viewer
 		m.pullRequests = msg.pullRequests
 		if msg.err != nil {
-			m.apiError = msg.err.Error()
+			m.apiError = safeText(msg.err.Error())
 		}
-		m.clampSelectedPR()
+		m.restoreSelection(selected)
 	case tea.KeyMsg:
+		if m.searching {
+			switch msg.String() {
+			case "ctrl+c":
+				return m, tea.Quit
+			case "esc", "enter":
+				m.searching = false
+			case "backspace", "ctrl+h":
+				m.query = dropLastRune(m.query)
+				m.selectedPR = 0
+			default:
+				if msg.Type == tea.KeyRunes {
+					m.query += string(msg.Runes)
+					m.selectedPR = 0
+				}
+			}
+			return m, nil
+		}
+		if m.showHelp {
+			if msg.String() == "?" || msg.String() == "esc" || msg.String() == "enter" {
+				m.showHelp = false
+			}
+			if msg.String() == "q" || msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -93,7 +127,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedPR--
 			}
 		case "down", "j":
-			if m.activeSection == 1 && m.selectedPR < len(m.pullRequests)-1 {
+			if m.activeSection == 1 && m.selectedPR < len(m.filteredPRs())-1 {
 				m.selectedPR++
 			}
 		case "home":
@@ -102,14 +136,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "end":
 			if m.activeSection == 1 {
-				m.selectedPR = len(m.pullRequests) - 1
+				m.selectedPR = len(m.filteredPRs()) - 1
 				m.clampSelectedPR()
 			}
+		case "?":
+			m.showHelp = true
+		case "/":
+			if m.activeSection == 1 {
+				m.searching = true
+			}
+		case "esc":
+			if m.activeSection == 1 {
+				m.query = ""
+				m.filter = allPRs
+				m.selectedPR = 0
+			}
+		case "a", "m", "d":
+			if m.activeSection == 1 {
+				switch msg.String() {
+				case "a":
+					m.filter = allPRs
+				case "m":
+					m.filter = minePRs
+				case "d":
+					m.filter = draftPRs
+				}
+				m.selectedPR = 0
+			}
 		case "r", "R":
+			if m.loading {
+				break
+			}
 			m.loading = true
 			m.apiError = ""
-			m.pullRequests = nil
-			m.selectedPR = 0
+			m.requestID++
 			return m, m.loadDashboard()
 		}
 	}
@@ -117,145 +177,62 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
-	width := m.width
-	if width < 48 {
-		width = 48
-	}
-
-	tabs := make([]string, 0, len(sections))
-	for i, section := range sections {
-		style := inactiveTabStyle
-		if i == m.activeSection {
-			style = activeTabStyle
+func (m model) filteredPRs() []githubapi.PullRequest {
+	query := strings.ToLower(strings.TrimSpace(m.query))
+	filtered := make([]githubapi.PullRequest, 0, len(m.pullRequests))
+	for _, pr := range m.pullRequests {
+		if m.filter == minePRs && (m.viewer.Login == "" || !strings.EqualFold(pr.User.Login, m.viewer.Login)) {
+			continue
 		}
-		tabs = append(tabs, style.Render(section))
+		if m.filter == draftPRs && !pr.Draft {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(pr.Repository+" "+pr.Title+" "+pr.User.Login+" "+fmt.Sprint(pr.Number)), query) {
+			continue
+		}
+		filtered = append(filtered, pr)
 	}
-
-	contentWidth := width - 4
-	if contentWidth < 40 {
-		contentWidth = 40
-	}
-
-	help := "←/→ or h/l: sections • r: refresh • q: quit"
-	if m.activeSection == 1 {
-		help = "←/→: sections • ↑/↓ or j/k: select • r: refresh • q: quit"
-	}
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		titleStyle.Render("glance"),
-		mutedStyle.Render("GitHub dashboard"),
-		"",
-		lipgloss.JoinHorizontal(lipgloss.Top, tabs...),
-		"",
-		panelStyle.Width(contentWidth).Render(m.sectionContent()),
-		"",
-		mutedStyle.Render(help),
-	)
+	return filtered
 }
 
-func (m model) sectionContent() string {
-	switch m.activeSection {
-	case 0:
-		content := "Welcome to glance"
-		switch {
-		case m.loading:
-			return content + "\n\nConnecting to GitHub and loading pull requests..."
-		case m.apiError != "":
-			if m.viewer.Login == "" {
-				return content + "\n\n" + m.apiError
-			}
-			return content + "\n\nConnected as @" + m.viewer.Login + ".\nCould not load pull requests: " + m.apiError
-		case m.viewer.Login != "":
-			return content + "\n\nConnected as @" + m.viewer.Login + ".\n" + fmt.Sprintf("Loaded %d open pull requests across your repositories.", len(m.pullRequests))
-		default:
-			return content + "\n\nAuthenticate with `gh auth login` to connect to GitHub."
-		}
-	case 1:
-		return m.pullRequestContent()
-	case 2:
-		return "No issues loaded yet."
-	case 3:
-		return "No notifications loaded yet."
-	default:
-		return "Select a dashboard section."
+func (m model) selectedKey() string {
+	items := m.filteredPRs()
+	if m.selectedPR >= 0 && m.selectedPR < len(items) {
+		return fmt.Sprintf("%s#%d", items[m.selectedPR].Repository, items[m.selectedPR].Number)
 	}
+	return ""
 }
 
-func (m model) pullRequestContent() string {
-	switch {
-	case m.loading:
-		return "Loading open pull requests across your repositories..."
-	case m.apiError != "":
-		return "Could not load open pull requests.\n\n" + m.apiError + "\n\nPress r to try again."
-	case len(m.pullRequests) == 0:
-		return "No open pull requests found across repositories visible to your account.\n\nPress r to refresh."
-	}
-
-	visibleCount := min(m.visiblePRCount(), len(m.pullRequests))
-	start := m.selectedPR - visibleCount/2
-	if start < 0 {
-		start = 0
-	}
-	if maxStart := len(m.pullRequests) - visibleCount; start > maxStart {
-		start = maxStart
-	}
-	end := min(start+visibleCount, len(m.pullRequests))
-	lines := []string{fmt.Sprintf("Open pull requests (%d)", len(m.pullRequests))}
-	for index := start; index < end; index++ {
-		pullRequest := m.pullRequests[index]
-		marker := "  "
-		if index == m.selectedPR {
-			marker = "› "
+func (m *model) restoreSelection(key string) {
+	for i, pr := range m.filteredPRs() {
+		if fmt.Sprintf("%s#%d", pr.Repository, pr.Number) == key {
+			m.selectedPR = i
+			return
 		}
-		state := "OPEN"
-		if pullRequest.Draft {
-			state = "DRAFT"
-		}
-		title := strings.Join(strings.Fields(pullRequest.Title), " ")
-		firstLine := fmt.Sprintf("%s[%s] %s#%d  %s", marker, state, pullRequest.Repository, pullRequest.Number, title)
-		lines = append(lines, m.truncatePRLine(firstLine), fmt.Sprintf("    @%s • updated %s", pullRequest.User.Login, relativeTime(pullRequest.UpdatedAt)))
 	}
-	lines = append(lines, fmt.Sprintf("Showing %d-%d of %d", start+1, end, len(m.pullRequests)))
-	return strings.Join(lines, "\n")
+	m.clampSelectedPR()
 }
 
-func (m model) visiblePRCount() int {
-	if m.height <= 14 {
-		return 1
+func dropLastRune(value string) string {
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return ""
 	}
-	return max(1, (m.height-14)/2)
+	return string(runes[:len(runes)-1])
 }
 
-func (m model) truncatePRLine(line string) string {
-	availableWidth := m.width - 14
-	if availableWidth < 20 {
-		availableWidth = 20
-	}
-	if lipgloss.Width(line) <= availableWidth {
-		return line
-	}
-
-	var truncated strings.Builder
-	width := 0
-	for _, char := range line {
-		charWidth := lipgloss.Width(string(char))
-		if width+charWidth > availableWidth-1 {
-			break
-		}
-		truncated.WriteRune(char)
-		width += charWidth
-	}
-	return truncated.String() + "…"
+func safeText(text string) string {
+	return strings.Join(strings.FieldsFunc(text, func(r rune) bool {
+		return unicode.IsControl(r)
+	}), " ")
 }
 
 func (m *model) clampSelectedPR() {
 	if m.selectedPR < 0 {
 		m.selectedPR = 0
 	}
-	if m.selectedPR >= len(m.pullRequests) {
-		m.selectedPR = max(0, len(m.pullRequests)-1)
+	if m.selectedPR >= len(m.filteredPRs()) {
+		m.selectedPR = max(0, len(m.filteredPRs())-1)
 	}
 }
 
