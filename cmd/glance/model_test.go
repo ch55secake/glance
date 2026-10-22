@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func TestNavigation(t *testing.T) {
@@ -396,6 +397,42 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestStatusColorsAndMonochromeFallback(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	m := initialModel()
+	m.activeSection = 1
+	m.loading = false
+	m.viewer.Login = "octocat"
+	m.pullRequests = []githubapi.PullRequest{
+		{Repository: "team/one", Number: 1, Title: "Open work", User: githubapi.User{Login: "octocat"}},
+		{Repository: "team/two", Number: 2, Title: "Draft work", Draft: true},
+	}
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	colored := m.View()
+	if !strings.Contains(colored, "48;2;97;73;42") ||
+		!strings.Contains(colored, "OPEN") || !strings.Contains(colored, "DRAFT") {
+		t.Fatalf("true-color view lacks color-coded PR states: %q", colored)
+	}
+	m.selectedPR = 1
+	if next := m.View(); !strings.Contains(next, "48;2;32;77;65") {
+		t.Fatalf("true-color view lacks OPEN badge: %q", next)
+	}
+	for _, width := range []int{30, 45, 80} {
+		m.width = width
+		for _, line := range strings.Split(m.View(), "\n") {
+			if lipgloss.Width(line) > m.width {
+				t.Errorf("colored line exceeds %d-column terminal: %q", width, line)
+			}
+		}
+	}
+	lipgloss.SetColorProfile(termenv.Ascii)
+	plain := m.View()
+	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "OPEN") || !strings.Contains(plain, "DRAFT") {
+		t.Fatalf("monochrome view lost readable statuses: %q", plain)
 	}
 }
 

@@ -10,13 +10,17 @@ import (
 )
 
 var (
-	brandStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#8BE9FD"))
-	accentStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#BD93F9"))
+	brandStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#82E9F0"))
+	accentStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#C9A7FF"))
 	textStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1F2F6"))
-	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#9298AE"))
-	goodStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#76D7B0"))
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F3C77B"))
-	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("#30314B")).Foreground(lipgloss.Color("#F1F2F6"))
+	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#A1AAC4"))
+	goodStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#9AE8B8"))
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBD389"))
+	errorStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF959A"))
+	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("#343C57")).Foreground(lipgloss.Color("#F1F2F6"))
+	activeStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#7252AB"))
+	openBadge     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#B8F3CF")).Background(lipgloss.Color("#214D42"))
+	draftBadge    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFE2A6")).Background(lipgloss.Color("#61492A"))
 )
 
 // View renders a fixed-height dashboard; the PR window moves with the selection.
@@ -59,6 +63,7 @@ func (m model) header(width int) string {
 	style := warnStyle
 	if m.apiError != "" {
 		status = "API ERROR"
+		style = errorStyle
 	} else if m.viewer.Login != "" {
 		status = "● @" + safeText(m.viewer.Login)
 		style = goodStyle
@@ -75,13 +80,13 @@ func (m model) header(width int) string {
 func (m model) navigation(width int) string {
 	if width < 65 {
 		label := fmt.Sprintf("%d / %d  %s", m.activeSection+1, len(sections), sections[m.activeSection])
-		return "  " + accentStyle.Render(clipLine(label, width))
+		return "  " + activeStyle.Render(clipLine(label, width))
 	}
 	tabs := make([]string, 0, len(sections))
 	for i, section := range sections {
 		label := fmt.Sprintf(" %d %s ", i+1, section)
 		if i == m.activeSection {
-			tabs = append(tabs, selectedStyle.Bold(true).Render(label))
+			tabs = append(tabs, activeStyle.Render(label))
 		} else {
 			tabs = append(tabs, mutedStyle.Render(label))
 		}
@@ -112,9 +117,9 @@ func (m model) overviewView(width int) []string {
 	lines = append(lines, "  "+textStyle.Render(clipLine("Connected as @"+safeText(m.viewer.Login)+".", width)), "")
 	if width >= 58 {
 		cards := []string{
-			statCard("OPEN", len(m.pullRequests), goodStyle),
-			statCard("YOURS", mine, accentStyle),
-			statCard("DRAFTS", drafts, warnStyle),
+			statCard("OPEN", len(m.pullRequests), goodStyle, "#214D42"),
+			statCard("YOURS", mine, accentStyle, "#443460"),
+			statCard("DRAFTS", drafts, warnStyle, "#61492A"),
 		}
 		lines = append(lines, "  "+strings.Join(cards, "  "))
 	} else {
@@ -127,9 +132,9 @@ func (m model) overviewView(width int) []string {
 	return append(lines, "", "  "+mutedStyle.Render(clipLine("Use → to browse pull requests across your repositories.", width)))
 }
 
-func statCard(label string, count int, style lipgloss.Style) string {
-	return lipgloss.NewStyle().Background(lipgloss.Color("#282A3D")).Padding(0, 1).
-		Render(style.Bold(true).Render(fmt.Sprintf("%d", count)) + " " + mutedStyle.Render(label))
+func statCard(label string, count int, style lipgloss.Style, background lipgloss.Color) string {
+	return style.Bold(true).Background(background).Padding(0, 1).
+		Render(fmt.Sprintf("%d %s", count, label))
 }
 
 func (m model) placeholderView(width int) []string {
@@ -212,7 +217,7 @@ func (m model) filterBar(width int) string {
 	for _, choice := range choices {
 		label := fmt.Sprintf(" %s %s ", choice.key, choice.name)
 		if m.filter == choice.mode {
-			parts = append(parts, selectedStyle.Bold(true).Render(label))
+			parts = append(parts, activeStyle.Render(label))
 		} else {
 			parts = append(parts, mutedStyle.Render(label))
 		}
@@ -229,16 +234,27 @@ func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []strin
 	if selected {
 		marker = "▎ "
 	}
-	state := "● OPEN"
+	state := " ● OPEN "
 	if pr.Draft {
-		state = "◆ DRAFT"
+		state = " ◆ DRAFT "
+	}
+	if !selected {
+		if pr.Draft {
+			state = draftBadge.Render(state)
+		} else {
+			state = openBadge.Render(state)
+		}
 	}
 	// Reserve room for the marker and keep the repository and PR number visible.
 	label := fmt.Sprintf("%s#%d", safeText(pr.Repository), pr.Number)
 	if width >= 60 {
-		label = align(clipLine(label, width-23), state+"  "+relativeTime(pr.UpdatedAt), width-2)
+		age := relativeTime(pr.UpdatedAt)
+		if !selected {
+			age = mutedStyle.Render(age)
+		}
+		label = align(clipLine(label, width-25), state+" "+age, width-2)
 	} else {
-		label = clipLine(label+"  "+state, width-2)
+		label = clipLine(label, max(1, width-lipgloss.Width(state)-3)) + " " + state
 	}
 	first := marker + label
 	second := marker + clipLine(safeText(pr.Title), width-2)
@@ -250,14 +266,22 @@ func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []strin
 		}
 		return row
 	}
-	return []string{"  " + mutedStyle.Render(first), "  " + textStyle.Bold(true).Render(second), "  " + mutedStyle.Render(third)}
+	return []string{"  " + first, "  " + textStyle.Bold(true).Render(second), "  " + mutedStyle.Render(third)}
 }
 
 func (m model) message(width int, title, detail, hint string) []string {
 	wrap := lipgloss.NewStyle().Width(width)
 	wrapped := strings.ReplaceAll(wrap.Render(safeText(detail)), "\n", "\n  ")
+	style := accentStyle
+	if m.apiError != "" {
+		style = errorStyle
+	} else if title == "All clear" {
+		style = goodStyle
+	} else if title == "No matches" {
+		style = warnStyle
+	}
 	return []string{
-		"", "  " + accentStyle.Render(clipLine(title, width)),
+		"", "  " + style.Render(clipLine(title, width)),
 		"  " + wrapped,
 		"", "  " + mutedStyle.Render(clipLine(hint, width)),
 	}
