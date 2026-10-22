@@ -249,6 +249,7 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 		"repos/octo/project/pulls/42/reviews":          []byte(`[[{"user":{"login":"reviewer"},"state":"APPROVED","submitted_at":"2026-10-21T12:00:00Z"}]]`),
 		"repos/octo/project/commits/abc123/check-runs": []byte(`[{"total_count":1,"check_runs":[{"name":"CI","status":"completed","conclusion":"success"}]}]`),
 		"repos/octo/project":                           []byte(`{"allow_merge_commit":true,"allow_squash_merge":true,"allow_rebase_merge":false}`),
+		"repos/octo/project/pulls/42/files":            []byte(`[[{"filename":"README.md","status":"modified","additions":1,"deletions":0,"patch":"@@ -1 +1 @@\n+review diff"}]]`),
 	}}
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
@@ -267,20 +268,25 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 		t.Fatalf("opening details changed list filters/search: %+v", m)
 	}
 	result := cmd()
-	loaded, ok := result.(pullRequestDetailsLoadedMsg)
+	batch, ok := result.(tea.BatchMsg)
 	if !ok {
-		t.Fatalf("details command returned %T, want pullRequestDetailsLoadedMsg", result)
+		t.Fatalf("details command returned %T, want batch of details and diff requests", result)
 	}
-	updated, _ = m.Update(loaded)
-	m = updated.(model)
-	if m.detailLoading || m.detailError != "" || m.prDetails.Head.SHA != "abc123" {
+	for _, load := range batch {
+		updated, _ = m.Update(load())
+		m = updated.(model)
+	}
+	if m.detailLoading || m.detailError != "" || m.prDetails.Head.SHA != "abc123" || !m.diffLoaded || m.diffLoading {
 		t.Fatalf("details were not loaded: %+v", m)
 	}
-	view := m.View()
+	view := strings.Join(m.pullRequestDetailsView(76), "\n")
 	for _, text := range []string{"octo/project#42", "Useful change", "Branches: feature", "main", "@hubot", "APPROVED", "CI: SUCCESS", "A detailed description."} {
 		if !strings.Contains(view, text) {
 			t.Errorf("details view missing %q: %s", text, view)
 		}
+	}
+	if !strings.Contains(view, "review diff") {
+		t.Errorf("diff was not rendered automatically in the PR details: %s", view)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	back := updated.(model)
@@ -289,7 +295,7 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 	}
 }
 
-func TestDiffLoadsOnDemandAndScrollsAcrossAllFiles(t *testing.T) {
+func TestOpeningPullRequestAutomaticallyLoadsContinuousDiff(t *testing.T) {
 	files := []githubapi.PullRequestFile{
 		{Filename: "README.md", Status: "modified", Additions: 1, Deletions: 1, Patch: "@@ -1 +1 @@\n-old text\n+new text" + strings.Repeat("\n context line", 35)},
 		{Filename: "src/app.go", Status: "added", Additions: 2, Patch: "@@ -0,0 +1,2 @@\n+package app\n+func Run() {}"},
@@ -299,45 +305,55 @@ func TestDiffLoadsOnDemandAndScrollsAcrossAllFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &modelTestRunner{responses: map[string][]byte{
-		"repos/octo/project/pulls/42/files": []byte("[" + string(page) + "]"),
+		"repos/octo/project/pulls/42":                   []byte(`{"number":42,"title":"Review me","state":"open","body":"PR details","user":{"login":"octocat"},"head":{"ref":"feature","sha":"headsha"},"base":{"ref":"main","sha":"basesha"}}`),
+		"repos/octo/project/pulls/42/reviews":           []byte(`[]`),
+		"repos/octo/project/commits/headsha/check-runs": []byte(`[{"total_count":0,"check_runs":[]}]`),
+		"repos/octo/project":                            []byte(`{"allow_merge_commit":true}`),
+		"repos/octo/project/pulls/42/files":             []byte("[" + string(page) + "]"),
 	}}
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
-	m.detailOpen = true
-	m.detailKey = "octo/project#42"
-	m.prDetails = githubapi.PullRequestDetails{PullRequest: githubapi.PullRequest{Number: 42, Repository: "octo/project"}}
-	updated, cmd := m.Update(key("d"))
+	m.loading = false
+	m.activeSection = 1
+	m.pullRequests = []githubapi.PullRequest{{Number: 42, Title: "Review me", Repository: "octo/project"}}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	if cmd == nil || !m.diffOpen || !m.diffLoading || len(runner.calls) != 0 {
-		t.Fatalf("diff did not load on demand: state=%+v calls=%#v command=%v", m, runner.calls, cmd != nil)
+	if cmd == nil || !m.detailOpen || !m.diffLoading || len(runner.calls) != 0 {
+		t.Fatalf("opening PR did not start loading the diff: state=%+v calls=%#v command=%v", m, runner.calls, cmd != nil)
 	}
-	loaded := cmd().(pullRequestFilesLoadedMsg)
-	updated, _ = m.Update(loaded)
-	m = updated.(model)
+	batchResult := cmd()
+	batch, ok := batchResult.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("open PR command returned %T, want batch", batchResult)
+	}
+	for _, load := range batch {
+		updated, _ = m.Update(load())
+		m = updated.(model)
+	}
 	if !m.diffLoaded || m.diffLoading || len(m.diffFiles) != 2 {
 		t.Fatalf("changed files were not loaded: %+v", m)
 	}
-	fullDiff := strings.Join(m.pullRequestDiffView(76), "\n")
-	for _, text := range []string{"DIFF  octo/project#42", "README.md", "File 1/2", "-old text", "+new text", "src/app.go", "File 2/2", "+func Run() {}"} {
+	fullDiff := strings.Join(m.pullRequestDetailsView(76), "\n")
+	for _, text := range []string{"CHANGED FILES", "README.md", "File 1/2", "-old text", "+new text", "src/app.go", "File 2/2", "+func Run() {}"} {
 		if !strings.Contains(fullDiff, text) {
 			t.Errorf("continuous diff missing %q: %s", text, fullDiff)
 		}
 	}
 	view := m.View()
-	for _, text := range []string{"README.md", "-old text", "+new text"} {
+	for _, text := range []string{"CHANGED FILES", "README.md"} {
 		if !strings.Contains(view, text) {
 			t.Errorf("diff view missing %q: %s", text, view)
 		}
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = updated.(model)
-	if m.diffScroll == 0 || !strings.Contains(m.View(), "src/app.go") || !strings.Contains(m.View(), "package app") {
-		t.Fatalf("scrolling did not reach the next file: scroll=%d view=%s", m.diffScroll, m.View())
+	if m.detailScroll == 0 || !strings.Contains(m.View(), "src/app.go") || !strings.Contains(m.View(), "package app") {
+		t.Fatalf("scrolling did not reach the next file: scroll=%d view=%s", m.detailScroll, m.View())
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(model)
-	if m.diffOpen || !m.detailOpen || !m.diffLoaded {
-		t.Fatalf("returning from diff lost the PR details or loaded diff: %+v", m)
+	if m.detailOpen || !m.diffLoaded {
+		t.Fatalf("returning to the inbox lost loaded diff: %+v", m)
 	}
 }
 
@@ -348,9 +364,9 @@ func TestPullRequestDiffLayoutsAndUnavailablePatches(t *testing.T) {
 				m := initialModel()
 				m.width, m.height = size.width, size.height
 				m.detailOpen = true
-				m.diffOpen = true
 				m.diffLoaded = true
 				m.detailKey = "octo/project#42"
+				m.prDetails = githubapi.PullRequestDetails{PullRequest: githubapi.PullRequest{Number: 42, Repository: "octo/project", State: "open"}}
 				m.diffFiles = []githubapi.PullRequestFile{{
 					Filename: "src/a-very-long-file-name.go", Status: "modified", Additions: 2, Deletions: 1,
 					Patch: "@@ -1,3 +1,4 @@\n package main\n-old(" + strings.Repeat("x", 120) + ")\n+new(" + strings.Repeat("y", 120) + ")",
@@ -370,8 +386,8 @@ func TestPullRequestDiffLayoutsAndUnavailablePatches(t *testing.T) {
 				if lines := strings.Count(view, "\n") + 1; lines > size.height {
 					t.Errorf("view uses %d rows, terminal has %d", lines, size.height)
 				}
-				if state == "binary" && !strings.Contains(view, "GitHub did not provide") {
-					t.Errorf("missing explanation for unavailable patch: %s", view)
+				if state == "binary" && !strings.Contains(strings.Join(m.pullRequestDetailsView(size.width-4), "\n"), "GitHub did not provide") {
+					t.Error("missing explanation for unavailable patch")
 				}
 			})
 		}

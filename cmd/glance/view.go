@@ -39,12 +39,6 @@ func (m model) View() string {
 	switch {
 	case m.showHelp:
 		lines = append(lines, m.helpView(inner)...)
-	case m.diffOpen:
-		content := m.pullRequestDiffView(inner)
-		visible := max(1, m.height-len(lines)-2)
-		start := min(max(0, m.diffScroll), max(0, len(content)-visible))
-		end := min(len(content), start+visible)
-		lines = append(lines, content[start:end]...)
 	case m.detailOpen:
 		content := m.pullRequestDetailsView(inner)
 		visible := max(1, m.height-len(lines)-2)
@@ -314,12 +308,23 @@ func (m model) hasErrors() bool {
 func (m model) helpView(width int) []string {
 	shortcuts := []string{
 		"←/→ or h/l  Switch sections", "↑/↓ or j/k  Select list item", "Home / End   First / last item",
-		"enter        Open PR details", "d            View PR diff", "m  Select/confirm merge",
+		"enter        Open PR details", "m            Select/confirm merge",
 		"/            Search PRs", "a / m / d    All / mine / drafts",
 		"esc          Clear search & filter", "r            Refresh", "?            Close help", "q            Quit",
 	}
+	if m.detailOpen {
+		shortcuts = []string{
+			"↑/↓ or j/k  Scroll PR details and diff", "Home / End   First / last line",
+			"m            Merge pull request", "r            Refresh details and diff",
+			"esc          Return to PR inbox", "?            Close help", "q            Quit",
+		}
+	}
 	if m.height < 19 {
-		shortcuts = []string{"←/→ sections   ↑/↓ select", "enter details   d diff   m merge", "/ search   a/m/d filters", "r refresh   ? close   q quit"}
+		if m.detailOpen {
+			shortcuts = []string{"↑/↓ or j/k scroll details and diff", "m merge   r refresh", "esc back   ? close   q quit"}
+		} else {
+			shortcuts = []string{"←/→ sections   ↑/↓ select", "enter details   m merge", "/ search   a/m/d filters", "r refresh   ? close   q quit"}
+		}
 	}
 	lines := []string{"  " + accentStyle.Render("KEYBOARD SHORTCUTS"), ""}
 	for _, shortcut := range shortcuts {
@@ -372,13 +377,15 @@ func (m model) pullRequestView(width int) []string {
 
 func (m model) pullRequestDetailsView(width int) []string {
 	if m.prDetails.Number == 0 {
+		var lines []string
 		if m.detailLoading {
-			return m.message(width, "Loading pull request", "Fetching pull request details, reviews, and checks...", "This can take a moment.")
+			lines = m.message(width, "Loading pull request", "Fetching pull request details, reviews, and checks...", "This can take a moment.")
+		} else if m.detailError != "" {
+			lines = m.message(width, "Could not load pull request", m.detailError, "Press r to try again, or esc to return.")
+		} else {
+			lines = m.message(width, "Pull request unavailable", "No pull request details are loaded.", "Press r to try again, or esc to return.")
 		}
-		if m.detailError != "" {
-			return m.message(width, "Could not load pull request", m.detailError, "Press r to try again, or esc to return.")
-		}
-		return m.message(width, "Pull request unavailable", "No pull request details are loaded.", "Press r to try again, or esc to return.")
+		return append(lines, m.pullRequestDiffLines(width)...)
 	}
 	details := m.prDetails
 	state := strings.ToUpper(details.State)
@@ -390,7 +397,6 @@ func (m model) pullRequestDetailsView(width int) []string {
 	lines := []string{
 		"  " + accentStyle.Render(clipLine(fmt.Sprintf("%s#%d  ·  %s", safeText(details.Repository), details.Number, safeText(details.Title)), width)),
 		"  " + goodStyle.Render(clipLine(state, width)),
-		"  " + mutedStyle.Render(clipLine("Press d to load changed files and view the diff", width)),
 	}
 	if m.detailLoading {
 		lines = append(lines, "  "+warnStyle.Render("Refreshing pull request details…"))
@@ -505,28 +511,28 @@ func (m model) pullRequestDetailsView(width int) []string {
 			lines = append(lines, "  "+line)
 		}
 	}
+	lines = append(lines, m.pullRequestDiffLines(width)...)
 	return lines
 }
 
-func (m model) pullRequestDiffView(width int) []string {
+func (m model) pullRequestDiffLines(width int) []string {
+	lines := []string{"", "  " + accentStyle.Render("CHANGED FILES")}
 	if m.diffLoading && !m.diffLoaded {
-		return m.message(width, "Loading diff", "Loading changed files and patches from GitHub...", "This can take a moment for large pull requests.")
-	}
-	if m.diffError != "" && !m.diffLoaded {
-		return m.message(width, "Could not load diff", m.diffError, "Press r to try again, or esc to return.")
-	}
-	if len(m.diffFiles) == 0 {
-		return m.message(width, "No changed files", "GitHub returned no files for this pull request.", "Press r to refresh, or esc to return.")
-	}
-	lines := []string{
-		"  " + accentStyle.Render(clipLine(fmt.Sprintf("DIFF  %s  ·  %d files", safeText(m.detailKey), len(m.diffFiles)), width)),
-	}
-	if m.diffLoading {
-		lines = append(lines, "  "+warnStyle.Render("Refreshing changed files…"))
+		return append(lines, "  "+warnStyle.Render("Loading changed files and patches from GitHub…"))
 	}
 	if m.diffError != "" {
-		lines = append(lines, "  "+errorStyle.Render(clipLine("Refresh failed: "+m.diffError, width)))
+		lines = append(lines, "  "+errorStyle.Render(clipLine("Could not load diff: "+m.diffError, width)))
+		if !m.diffLoaded || len(m.diffFiles) == 0 {
+			return lines
+		}
 	}
+	if !m.diffLoaded {
+		return append(lines, "  "+mutedStyle.Render("Changed files have not loaded yet."))
+	}
+	if len(m.diffFiles) == 0 {
+		return append(lines, "  "+mutedStyle.Render("No changed files."))
+	}
+	lines = append(lines, "  "+mutedStyle.Render(fmt.Sprintf("%d files changed", len(m.diffFiles))))
 	for i, file := range m.diffFiles {
 		if i > 0 {
 			lines = append(lines, "")
@@ -674,9 +680,7 @@ func (m model) message(width int, title, detail, hint string) []string {
 
 func (m model) footer(width int) string {
 	help := "←/→ sections   r refresh   ? help   q quit"
-	if m.diffOpen {
-		help = "↑/↓ scroll diff   home/end top/bottom   r refresh   esc back"
-	} else if m.detailOpen {
+	if m.detailOpen {
 		switch {
 		case m.mergeInProgress:
 			help = "Merge in progress…   q quit"
@@ -685,7 +689,7 @@ func (m model) footer(width int) string {
 		case m.mergeDialog == confirmMerge:
 			help = "y confirm merge   esc cancel"
 		default:
-			help = "esc back   ↑/↓ scroll   m merge   r refresh   ? help"
+			help = "esc back   ↑/↓/j/k scroll   m merge   r refresh"
 		}
 	} else {
 		switch m.activeSection {

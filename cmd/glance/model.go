@@ -45,13 +45,11 @@ type model struct {
 	detailError          string
 	detailScroll         int
 	prDetails            githubapi.PullRequestDetails
-	diffOpen             bool
 	diffLoading          bool
 	diffLoaded           bool
 	diffRequestID        int
 	diffError            string
 	diffFiles            []githubapi.PullRequestFile
-	diffScroll           int
 	mergeDialog          mergeDialogState
 	mergeMethodIndex     int
 	mergeMethod          githubapi.MergeMethod
@@ -164,14 +162,12 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	m.mergeDialog = noMergeDialog
 	m.mergeInProgress = false
 	m.detailScroll = 0
-	m.diffOpen = false
-	m.diffLoading = false
+	m.diffLoading = true
 	m.diffLoaded = false
 	m.diffError = ""
 	m.diffFiles = nil
-	m.diffScroll = 0
 	m.detailRequestID++
-	return m.loadPullRequestDetails()
+	return tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
 }
 
 func (m model) loadPullRequestDetails() tea.Cmd {
@@ -296,14 +292,17 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "end":
 		m.detailScroll = m.maxDetailScroll()
 	case "r", "R":
-		if !m.detailLoading {
+		if !m.detailLoading && !m.diffLoading {
 			m.detailLoading = true
 			m.detailError = ""
+			m.diffLoading = true
+			m.diffLoaded = false
+			m.diffError = ""
+			m.diffFiles = nil
+			m.detailScroll = 0
 			m.detailRequestID++
-			return m, m.loadPullRequestDetails()
+			return m, tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
 		}
-	case "d", "D", "v", "V":
-		return m, m.openPullRequestDiff()
 	case "m", "M":
 		m.detailScroll = 0
 		switch {
@@ -337,51 +336,6 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) maxDetailScroll() int {
 	visible := max(1, m.height-6)
 	return max(0, len(m.pullRequestDetailsView(max(1, m.width-4)))-visible)
-}
-
-func (m *model) openPullRequestDiff() tea.Cmd {
-	m.diffOpen = true
-	m.diffScroll = 0
-	if m.diffLoaded || m.diffLoading {
-		return nil
-	}
-	m.diffLoading = true
-	m.diffError = ""
-	return m.loadPullRequestFiles()
-}
-
-func (m model) maxDiffScroll() int {
-	visible := max(1, m.height-6)
-	return max(0, len(m.pullRequestDiffView(max(1, m.width-4)))-visible)
-}
-
-func (m model) updatePullRequestDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c", "q":
-		return m, tea.Quit
-	case "esc":
-		m.diffOpen = false
-	case "?":
-		m.showHelp = true
-	case "up", "k":
-		m.diffScroll = max(0, m.diffScroll-1)
-	case "down", "j":
-		m.diffScroll = min(m.maxDiffScroll(), m.diffScroll+1)
-	case "home":
-		m.diffScroll = 0
-	case "end":
-		m.diffScroll = m.maxDiffScroll()
-	case "r", "R":
-		if !m.diffLoading {
-			m.diffLoading = true
-			m.diffLoaded = false
-			m.diffError = ""
-			m.diffFiles = nil
-			m.diffScroll = 0
-			return m, m.loadPullRequestFiles()
-		}
-	}
-	return m, nil
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -444,7 +398,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffFiles = msg.files
 		m.diffLoaded = true
 		m.diffError = ""
-		m.diffScroll = min(m.diffScroll, m.maxDiffScroll())
+		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
 	case pullRequestMergedMsg:
 		if msg.requestID != m.mergeRequestID || msg.key != m.detailKey {
 			break
@@ -486,9 +440,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
-		}
-		if m.diffOpen {
-			return m.updatePullRequestDiffKey(msg)
 		}
 		if m.detailOpen {
 			return m.updatePullRequestDetailKey(msg)
