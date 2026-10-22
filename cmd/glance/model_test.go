@@ -11,6 +11,7 @@ import (
 	"glance/internal/githubapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestNavigation(t *testing.T) {
@@ -214,6 +215,141 @@ func TestRefreshReloadsDashboard(t *testing.T) {
 	refreshed := updated.(model)
 	if cmd == nil || !refreshed.loading || refreshed.apiError != "" {
 		t.Fatalf("refresh state = %+v, command = %v; want loading with cleared error", refreshed, cmd != nil)
+	}
+}
+
+func key(text string) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}
+}
+
+func TestFiltersAndSearchAreScopedToPullRequests(t *testing.T) {
+	m := initialModel()
+	m.loading = false
+	m.viewer.Login = "octocat"
+	m.pullRequests = []githubapi.PullRequest{
+		{Repository: "team/alpha", Number: 1, Title: "Fix search", User: githubapi.User{Login: "octocat"}},
+		{Repository: "team/beta", Number: 2, Title: "Add tests", User: githubapi.User{Login: "hubot"}, Draft: true},
+	}
+	updated, _ := m.Update(key("m"))
+	if updated.(model).filter != allPRs {
+		t.Fatal("filter changed outside PR section")
+	}
+	m.activeSection = 1
+	for _, tc := range []struct {
+		key        string
+		wantFilter prFilter
+		wantNumber int
+	}{
+		{"m", minePRs, 1}, {"d", draftPRs, 1}, {"a", allPRs, 2},
+	} {
+		updated, _ = m.Update(key(tc.key))
+		m = updated.(model)
+		if m.filter != tc.wantFilter || len(m.filteredPRs()) != tc.wantNumber {
+			t.Fatalf("filter %q: mode %v, results %d", tc.key, m.filter, len(m.filteredPRs()))
+		}
+	}
+	updated, _ = m.Update(key("/"))
+	m = updated.(model)
+	for _, char := range "BETA" {
+		updated, _ = m.Update(key(string(char)))
+		m = updated.(model)
+	}
+	if !m.searching || len(m.filteredPRs()) != 1 || m.filteredPRs()[0].Number != 2 {
+		t.Fatalf("search query %q matched %+v", m.query, m.filteredPRs())
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if m.searching || m.query != "BETA" {
+		t.Fatalf("enter lost search query: %+v", m)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(model)
+	if m.query != "" || m.filter != allPRs || len(m.filteredPRs()) != 2 {
+		t.Fatalf("esc did not clear filters: %+v", m)
+	}
+}
+
+func TestSearchEditingAndNoResults(t *testing.T) {
+	m := initialModel()
+	m.activeSection = 1
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{{Title: "Hello", Repository: "team/hello"}}
+	for _, message := range []tea.KeyMsg{key("/"), key("x"), key("界")} {
+		updated, _ := m.Update(message)
+		m = updated.(model)
+	}
+	if m.query != "x界" || !strings.Contains(m.View(), "No matching pull requests") {
+		t.Fatalf("search state = %q, view = %q", m.query, m.View())
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = updated.(model)
+	if m.query != "x" {
+		t.Fatalf("backspace left %q, want x", m.query)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.(model).searching {
+		t.Fatal("esc did not exit search mode")
+	}
+}
+
+func TestRefreshPreservesSelectionAndIgnoresStaleResponse(t *testing.T) {
+	m := initialModel()
+	m.loading = false
+	m.activeSection = 1
+	m.pullRequests = []githubapi.PullRequest{{Repository: "team/a", Number: 1}, {Repository: "team/b", Number: 2}}
+	m.selectedPR = 1
+	updated, _ := m.Update(key("r"))
+	m = updated.(model)
+	if !m.loading || m.requestID != 1 || m.selectedPR != 1 {
+		t.Fatalf("refresh state lost selection: %+v", m)
+	}
+	updated, _ = m.Update(dashboardLoadedMsg{requestID: 0, err: errors.New("old failure")})
+	m = updated.(model)
+	if !m.loading || m.apiError != "" {
+		t.Fatalf("stale response changed state: %+v", m)
+	}
+	updated, _ = m.Update(dashboardLoadedMsg{requestID: 1, pullRequests: []githubapi.PullRequest{
+		{Repository: "team/b", Number: 2}, {Repository: "team/a", Number: 1},
+	}})
+	m = updated.(model)
+	if m.loading || m.selectedPR != 0 || m.pullRequests[0].Repository != "team/b" {
+		t.Fatalf("refreshed selection not preserved: %+v", m)
+	}
+}
+
+func TestViewFitsTerminalAndSanitizesTitles(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 16}, {50, 20}, {90, 30}} {
+		m := initialModel()
+		m.width, m.height = size.width, size.height
+		m.loading = false
+		m.activeSection = 1
+		m.pullRequests = []githubapi.PullRequest{{Repository: "team/project", Number: 42, Title: "bad\x1b[31m\n multiline title", User: githubapi.User{Login: "octocat"}}}
+		view := m.View()
+		if strings.Contains(view, "\x1b[31m") || strings.Contains(view, "multiline\n") {
+			t.Fatalf("unsafe title rendered: %q", view)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got > size.width {
+				t.Errorf("%dx%d: line width %d exceeds terminal: %q", size.width, size.height, got, line)
+			}
+		}
+		if lines := strings.Count(view, "\n") + 1; lines > size.height {
+			t.Errorf("%dx%d: view uses %d rows", size.width, size.height, lines)
+		}
+	}
+}
+
+func TestHelpOverlay(t *testing.T) {
+	m := initialModel()
+	m.height = 16
+	updated, _ := m.Update(key("?"))
+	m = updated.(model)
+	if !m.showHelp || !strings.Contains(m.View(), "Shortcuts") {
+		t.Fatal("help overlay not shown")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.(model).showHelp {
+		t.Fatal("help overlay did not close")
 	}
 }
 

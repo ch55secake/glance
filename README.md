@@ -26,11 +26,13 @@ commands while you use the TUI.
 make run
 ```
 
-Use the left/right arrow keys or `h`/`l` to switch sections, and `q` to quit.
-The Pull requests section loads open PRs from repositories you own, collaborate
-on, or can access through an organization. Use up/down or `j`/`k` to move through
-the list, and `r` to refresh. The Overview shows the authenticated user and the
-number of loaded pull requests.
+Use left/right or `h`/`l` to switch sections; press `?` for the full shortcut
+list and `q` to quit. The Pull requests section loads open PRs from repositories
+you own, collaborate on, or can access through an organization. Navigate with
+up/down or `j`/`k`, search with `/`, and filter with `a` (all), `m` (authored by
+you), or `d` (drafts). Press `esc` to clear the active search and filter, or `r`
+to refresh. The Overview shows the authenticated user and PR counts. PR details
+and actions are not yet available.
 
 Build the executable with:
 
