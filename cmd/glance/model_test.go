@@ -150,7 +150,7 @@ func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
 	}
 
 	view := m.View()
-	for _, want := range []string{"Open pull requests (2)", "[OPEN] octo/project#42", "Add useful dashboard", "@octocat", "[DRAFT] octo/other#7", "@hubot", "updated 2h ago"} {
+	for _, want := range []string{"PULL REQUESTS", "2 open", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "DRAFT", "@hubot", "updated 2h ago"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view %q does not contain %q", view, want)
 		}
@@ -344,12 +344,58 @@ func TestHelpOverlay(t *testing.T) {
 	m.height = 16
 	updated, _ := m.Update(key("?"))
 	m = updated.(model)
-	if !m.showHelp || !strings.Contains(m.View(), "Shortcuts") {
+	if !m.showHelp || !strings.Contains(m.View(), "SHORTCUTS") {
 		t.Fatal("help overlay not shown")
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if updated.(model).showHelp {
 		t.Fatal("help overlay did not close")
+	}
+}
+
+func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
+		for _, state := range []string{"overview", "list", "search", "help", "error", "empty"} {
+			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, state), func(t *testing.T) {
+				m := initialModel()
+				m.width, m.height = size.width, size.height
+				m.viewer.Login = "octocat"
+				m.loading = false
+				m.pullRequests = make([]githubapi.PullRequest, 18)
+				for i := range m.pullRequests {
+					m.pullRequests[i] = githubapi.PullRequest{
+						Number: i + 1, Repository: "company/project", Title: "Improve the dashboard experience",
+						User: githubapi.User{Login: "octocat"}, UpdatedAt: time.Now().Add(-2 * time.Hour),
+					}
+				}
+				switch state {
+				case "list":
+					m.activeSection = 1
+					m.selectedPR = 14
+				case "search":
+					m.activeSection = 1
+					m.searching = true
+					m.query = "project"
+				case "help":
+					m.showHelp = true
+				case "error":
+					m.apiError = "GitHub denied access; check repository access and the permissions granted to gh."
+					m.activeSection = 1
+				case "empty":
+					m.pullRequests = nil
+					m.activeSection = 1
+				}
+				view := m.View()
+				for _, line := range strings.Split(view, "\n") {
+					if got := lipgloss.Width(line); got > size.width {
+						t.Errorf("line width %d exceeds %d: %q", got, size.width, line)
+					}
+				}
+				if lines := strings.Count(view, "\n") + 1; lines > size.height {
+					t.Errorf("view uses %d rows, terminal has %d:\n%s", lines, size.height, view)
+				}
+			})
+		}
 	}
 }
 
