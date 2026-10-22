@@ -8,11 +8,10 @@ first to agree on the approach.
 Before opening a pull request, run:
 
 ```sh
-gofmt -w .
-go test ./...
-go vet ./...
-go build ./...
+make check
 ```
+
+`make lint` runs the pinned golangci-lint version.
 
 Pull requests should explain the user-facing change and include tests where
 appropriate. Keep changes focused and avoid adding dependencies without a clear

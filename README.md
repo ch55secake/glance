@@ -23,7 +23,7 @@ authentication. It does not persist credentials or launch interactive GitHub
 commands while you use the TUI.
 
 ```sh
-go run ./cmd/glance
+make run
 ```
 
 Use the left/right arrow keys or `h`/`l` to switch sections, and `q` to quit.
@@ -35,16 +35,17 @@ number of loaded pull requests.
 Build the executable with:
 
 ```sh
-go build -o bin/glance ./cmd/glance
+make build
 ```
 
 ## Checks
 
 ```sh
-gofmt -w .
-go test ./...
-go vet ./...
+make check
 ```
+
+`make lint` runs the pinned golangci-lint version, and `make test-race` runs the
+race-enabled test suite.
 
 GitHub Actions reuses the shared Go build/test, lint, and vulnerability
 workflows from `ch55secake/cheesecake-factory`. A shared release workflow
