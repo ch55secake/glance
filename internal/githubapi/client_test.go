@@ -131,6 +131,108 @@ func TestListOpenPullRequestsReportsRepositoryError(t *testing.T) {
 	}
 }
 
+func TestListOpenIssuesAcrossRepositoriesFiltersPullRequests(t *testing.T) {
+	runner := &routingRunner{responses: map[string][]byte{
+		"user/repos": []byte(`[[` +
+			`{"name":"one","full_name":"octo/one","owner":{"login":"octo"},"has_issues":true},` +
+			`{"name":"disabled","full_name":"octo/disabled","owner":{"login":"octo"},"has_issues":false}],` +
+			`[{"name":"two","full_name":"org/two","owner":{"login":"org"},"has_issues":true}]]`),
+		"repos/octo/one/issues": []byte(`[[` +
+			`{"number":3,"title":"Older issue","state":"open","updated_at":"2026-10-20T12:00:00Z","user":{"login":"octocat"},"labels":[{"name":"bug","color":"ff0000"}],"comments":2},` +
+			`{"number":4,"title":"A pull request","state":"open","pull_request":{"url":"https://api.github.com/repos/octo/one/pulls/4"}}]]`),
+		"repos/org/two/issues": []byte(`[[{"number":9,"title":"Newer issue","state":"open","updated_at":"2026-10-21T12:00:00Z","user":{"login":"hubot"}}]]`),
+	}}
+	issues, err := NewClientWithRunner(runner).ListOpenIssues(context.Background())
+	if err != nil {
+		t.Fatalf("ListOpenIssues() error = %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("ListOpenIssues() returned %d items, want actual issues only: %+v", len(issues), issues)
+	}
+	if issues[0].Repository != "org/two" || issues[0].Number != 9 || issues[1].Repository != "octo/one" {
+		t.Errorf("issues = %+v, want repository names and newest-first ordering", issues)
+	}
+	if issues[1].Comments != 2 || len(issues[1].Labels) != 1 || issues[1].Labels[0].Name != "bug" {
+		t.Errorf("issue metadata was not decoded: %+v", issues[1])
+	}
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.calls) != 3 {
+		t.Fatalf("gh made %d calls, want repository listing and two issue requests", len(runner.calls))
+	}
+	for _, call := range runner.calls[1:] {
+		if call[len(call)-1] == "repos/octo/disabled/issues" {
+			t.Fatal("requested issues for a repository with issues disabled")
+		}
+		if !contains(call, "state=open") || !contains(call, "--paginate") {
+			t.Errorf("issue call = %#v, want open state and pagination", call)
+		}
+	}
+}
+
+func TestListOpenIssuesWithNoIssueEnabledRepositories(t *testing.T) {
+	runner := &stubRunner{stdout: []byte(`[[{"name":"wiki","full_name":"octo/wiki","owner":{"login":"octo"},"has_issues":false}]]`)}
+	issues, err := NewClientWithRunner(runner).ListOpenIssues(context.Background())
+	if err != nil {
+		t.Fatalf("ListOpenIssues() error = %v", err)
+	}
+	if issues == nil || len(issues) != 0 {
+		t.Fatalf("ListOpenIssues() = %#v, want empty slice", issues)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("gh calls = %#v, want only repository listing", runner.calls)
+	}
+}
+
+func TestListOpenIssuesReportsRepositoryError(t *testing.T) {
+	runner := &routingRunner{
+		responses: map[string][]byte{
+			"user/repos": []byte(`[[{"name":"private","full_name":"octo/private","owner":{"login":"octo"},"has_issues":true}]]`),
+		},
+		stderrs: map[string][]byte{"repos/octo/private/issues": []byte("HTTP 403: Resource not accessible")},
+		errors:  map[string]error{"repos/octo/private/issues": errors.New("exit status 1")},
+	}
+	_, err := NewClientWithRunner(runner).ListOpenIssues(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "octo/private") {
+		t.Fatalf("ListOpenIssues() error = %v, want repository context", err)
+	}
+}
+
+func TestListNotificationsUsesPaginationAndKeepsUnreadMetadata(t *testing.T) {
+	runner := &stubRunner{stdout: []byte(`[[` +
+		`{"id":"1","unread":false,"reason":"mention","updated_at":"2026-10-20T12:00:00Z","last_read_at":"2026-10-20T12:30:00Z","subject":{"title":"Old thread","url":"https://api.github.com/repos/octo/one/issues/1","type":"Issue"},"repository":{"id":1,"name":"one","full_name":"octo/one","html_url":"https://github.com/octo/one","owner":{"login":"octo"}}}],` +
+		`[{"id":"2","unread":true,"reason":"review_requested","updated_at":"2026-10-21T12:00:00Z","subject":{"title":"Review this","type":"PullRequest"},"repository":{"id":2,"name":"two","full_name":"org/two","owner":{"login":"org"}}}]]`)}
+	notifications, err := NewClientWithRunner(runner).ListNotifications(context.Background())
+	if err != nil {
+		t.Fatalf("ListNotifications() error = %v", err)
+	}
+	if len(notifications) != 2 || notifications[0].ID != "2" || notifications[1].Unread {
+		t.Fatalf("ListNotifications() = %+v, want pages flattened and newest first", notifications)
+	}
+	if notifications[0].Subject.Type != "PullRequest" || notifications[0].Reason != "review_requested" || notifications[0].Repository.FullName != "org/two" {
+		t.Errorf("notification metadata was not decoded: %+v", notifications[0])
+	}
+	if notifications[1].LastReadAt == nil || notifications[1].Subject.Title != "Old thread" {
+		t.Errorf("read notification metadata was not decoded: %+v", notifications[1])
+	}
+	want := [][]string{{
+		"api", "--paginate", "--slurp", "-X", "GET",
+		"-F", "all=true", "-F", "participating=false", "-F", "per_page=100", "notifications",
+	}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Errorf("gh calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestListNotificationsReportsCommandError(t *testing.T) {
+	runner := &stubRunner{stderr: []byte("HTTP 403: Resource not accessible"), err: errors.New("exit status 1")}
+	_, err := NewClientWithRunner(runner).ListNotifications(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "permissions granted to gh") {
+		t.Fatalf("ListNotifications() error = %v, want actionable permission error", err)
+	}
+}
+
 func TestGhAuthenticationErrorIsActionable(t *testing.T) {
 	runner := &stubRunner{
 		stderr: []byte("gh: not logged into any GitHub hosts. Run gh auth login."),
