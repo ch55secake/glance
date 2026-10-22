@@ -8,28 +8,28 @@ still in progress.
 ## Requirements
 
 - Go 1.26 or newer
+- GitHub CLI (`gh`), authenticated with `gh auth login`
 
 ## Run
 
-Set a GitHub personal access token in `GLANCE_GITHUB_TOKEN`:
+Install the GitHub CLI and authenticate once before starting glance:
 
 ```sh
-export GLANCE_GITHUB_TOKEN="<your-token>"
+gh auth login
 ```
 
-Use a fine-grained token scoped to the repositories glance should access, with
-only the permissions needed for those repositories.
-The token is held in process memory and is not written to disk or logged. Do not
-commit it to the repository.
+glance uses non-interactive `gh api` calls and relies on the CLI's existing
+authentication. It does not persist credentials or launch interactive GitHub
+commands while you use the TUI.
 
 ```sh
 go run ./cmd/glance
 ```
 
 The initial TUI is a placeholder shell. Use the left/right arrow keys or `h`/`l`
-to switch sections, and `q` to quit. The Overview checks the token with the
-GitHub API and shows the authenticated user; PR listing and actions are not
-implemented yet. glance does not invoke `gh`.
+to switch sections, and `q` to quit. The Overview checks your GitHub CLI
+authentication with `gh api user` and shows the authenticated user; PR listing
+and actions are not implemented yet.
 
 Build the executable with:
 

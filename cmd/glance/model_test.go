@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -84,15 +85,52 @@ func TestGitHubAPIErrorIsShownInOverview(t *testing.T) {
 	}
 }
 
-func TestMissingTokenIsShownInOverview(t *testing.T) {
-	t.Setenv(githubapi.TokenEnvVar, "")
-	msg := loadViewer().(viewerLoadedMsg)
-	if !errors.Is(msg.err, githubapi.ErrMissingToken) {
-		t.Fatalf("loadViewer() error = %v, want %v", msg.err, githubapi.ErrMissingToken)
+func TestInitLoadsViewerThroughGhAPI(t *testing.T) {
+	runner := &modelTestRunner{stdout: []byte(`{"login":"octocat"}`)}
+	m := initialModel()
+	m.client = githubapi.NewClientWithRunner(runner)
+
+	result := m.Init()()
+	msg, ok := result.(viewerLoadedMsg)
+	if !ok {
+		t.Fatalf("Init() message = %T, want viewerLoadedMsg", result)
+	}
+	if msg.err != nil {
+		t.Fatalf("Init() error = %v", msg.err)
+	}
+	if got := strings.Join(runner.args, " "); got != "api user" {
+		t.Fatalf("gh args = %q, want api user", got)
 	}
 
-	updated, _ := initialModel().Update(msg)
-	if view := updated.(model).View(); !strings.Contains(view, githubapi.TokenEnvVar) {
-		t.Errorf("view %q does not explain how to configure authentication", view)
+	updated, _ := m.Update(msg)
+	if view := updated.(model).View(); !strings.Contains(view, "Connected as @octocat") {
+		t.Errorf("view %q does not show the authenticated user", view)
 	}
+}
+
+func TestGhAuthenticationErrorIsShownInOverview(t *testing.T) {
+	runner := &modelTestRunner{
+		stderr: []byte("gh: not logged into any GitHub hosts"),
+		err:    errors.New("exit status 1"),
+	}
+	m := initialModel()
+	m.client = githubapi.NewClientWithRunner(runner)
+	msg := m.Init()().(viewerLoadedMsg)
+	updated, _ := m.Update(msg)
+
+	if view := updated.(model).View(); !strings.Contains(view, "gh auth login") {
+		t.Errorf("view %q does not show gh auth login guidance", view)
+	}
+}
+
+type modelTestRunner struct {
+	stdout []byte
+	stderr []byte
+	err    error
+	args   []string
+}
+
+func (r *modelTestRunner) Run(_ context.Context, args ...string) ([]byte, []byte, error) {
+	r.args = append([]string(nil), args...)
+	return r.stdout, r.stderr, r.err
 }
