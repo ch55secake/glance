@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -17,27 +18,38 @@ var sections = []string{"Overview", "Pull requests", "Issues", "Notifications"}
 const dashboardLoadTimeout = 2 * time.Minute
 
 type model struct {
-	width         int
-	height        int
-	activeSection int
-	loading       bool
-	viewer        githubapi.User
-	apiError      string
-	pullRequests  []githubapi.PullRequest
-	selectedPR    int
-	filter        prFilter
-	query         string
-	searching     bool
-	showHelp      bool
-	requestID     int
-	client        *githubapi.Client
+	width                int
+	height               int
+	activeSection        int
+	loading              bool
+	viewer               githubapi.User
+	apiError             string
+	pullRequests         []githubapi.PullRequest
+	selectedPR           int
+	issues               []githubapi.Issue
+	issueError           string
+	selectedIssue        int
+	notifications        []githubapi.Notification
+	notificationError    string
+	selectedNotification int
+	filter               prFilter
+	query                string
+	searching            bool
+	showHelp             bool
+	requestID            int
+	client               *githubapi.Client
 }
 
 type dashboardLoadedMsg struct {
-	requestID    int
-	viewer       githubapi.User
-	pullRequests []githubapi.PullRequest
-	err          error
+	requestID       int
+	viewer          githubapi.User
+	pullRequests    []githubapi.PullRequest
+	issues          []githubapi.Issue
+	notifications   []githubapi.Notification
+	err             error
+	pullRequestErr  error
+	issueErr        error
+	notificationErr error
 }
 
 type prFilter int
@@ -65,8 +77,23 @@ func (m model) loadDashboard() tea.Cmd {
 		if err != nil {
 			return dashboardLoadedMsg{requestID: m.requestID, err: err}
 		}
-		pullRequests, err := m.client.ListOpenPullRequests(ctx)
-		return dashboardLoadedMsg{requestID: m.requestID, viewer: viewer, pullRequests: pullRequests, err: err}
+		result := dashboardLoadedMsg{requestID: m.requestID, viewer: viewer}
+		var requests sync.WaitGroup
+		requests.Add(3)
+		go func() {
+			defer requests.Done()
+			result.pullRequests, result.pullRequestErr = m.client.ListOpenPullRequests(ctx)
+		}()
+		go func() {
+			defer requests.Done()
+			result.issues, result.issueErr = m.client.ListOpenIssues(ctx)
+		}()
+		go func() {
+			defer requests.Done()
+			result.notifications, result.notificationErr = m.client.ListNotifications(ctx)
+		}()
+		requests.Wait()
+		return result
 	}
 }
 
@@ -79,15 +106,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.requestID != m.requestID {
 			break
 		}
-		selected := m.selectedKey()
+		selectedPR := m.selectedKey()
+		selectedIssue := m.selectedIssueKey()
+		selectedNotification := m.selectedNotificationID()
 		m.loading = false
-		m.apiError = ""
-		m.viewer = msg.viewer
-		m.pullRequests = msg.pullRequests
 		if msg.err != nil {
 			m.apiError = safeText(msg.err.Error())
+			m.issueError = m.apiError
+			m.notificationError = m.apiError
+		} else {
+			m.viewer = msg.viewer
+			m.apiError = errorString(msg.pullRequestErr)
+			m.issueError = errorString(msg.issueErr)
+			m.notificationError = errorString(msg.notificationErr)
+			if msg.pullRequestErr == nil {
+				m.pullRequests = msg.pullRequests
+			}
+			if msg.issueErr == nil {
+				m.issues = msg.issues
+			}
+			if msg.notificationErr == nil {
+				m.notifications = msg.notifications
+			}
 		}
-		m.restoreSelection(selected)
+		m.restoreSelection(selectedPR)
+		m.restoreIssueSelection(selectedIssue)
+		m.restoreNotificationSelection(selectedNotification)
 	case tea.KeyMsg:
 		if m.searching {
 			switch msg.String() {
@@ -123,22 +167,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "right", "l", "tab":
 			m.activeSection = (m.activeSection + 1) % len(sections)
 		case "up", "k":
-			if m.activeSection == 1 && m.selectedPR > 0 {
-				m.selectedPR--
-			}
+			m.moveSelection(-1)
 		case "down", "j":
-			if m.activeSection == 1 && m.selectedPR < len(m.filteredPRs())-1 {
-				m.selectedPR++
-			}
+			m.moveSelection(1)
 		case "home":
-			if m.activeSection == 1 {
-				m.selectedPR = 0
-			}
+			m.setSelection(0)
 		case "end":
-			if m.activeSection == 1 {
-				m.selectedPR = len(m.filteredPRs()) - 1
-				m.clampSelectedPR()
-			}
+			m.setSelection(m.visibleItemTotal() - 1)
 		case "?":
 			m.showHelp = true
 		case "/":
@@ -169,6 +204,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.loading = true
 			m.apiError = ""
+			m.issueError = ""
+			m.notificationError = ""
 			m.requestID++
 			return m, m.loadDashboard()
 		}
@@ -195,10 +232,69 @@ func (m model) filteredPRs() []githubapi.PullRequest {
 	return filtered
 }
 
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return safeText(err.Error())
+}
+
+func (m model) visibleItemTotal() int {
+	switch m.activeSection {
+	case 1:
+		return len(m.filteredPRs())
+	case 2:
+		return len(m.issues)
+	case 3:
+		return len(m.notifications)
+	default:
+		return 0
+	}
+}
+
+func (m *model) moveSelection(delta int) {
+	switch m.activeSection {
+	case 1:
+		m.selectedPR += delta
+		m.clampSelectedPR()
+	case 2:
+		m.selectedIssue = min(max(0, m.selectedIssue+delta), max(0, len(m.issues)-1))
+	case 3:
+		m.selectedNotification = min(max(0, m.selectedNotification+delta), max(0, len(m.notifications)-1))
+	}
+}
+
+func (m *model) setSelection(index int) {
+	switch m.activeSection {
+	case 1:
+		m.selectedPR = index
+		m.clampSelectedPR()
+	case 2:
+		m.selectedIssue = min(max(0, index), max(0, len(m.issues)-1))
+	case 3:
+		m.selectedNotification = min(max(0, index), max(0, len(m.notifications)-1))
+	}
+}
+
 func (m model) selectedKey() string {
 	items := m.filteredPRs()
 	if m.selectedPR >= 0 && m.selectedPR < len(items) {
 		return fmt.Sprintf("%s#%d", items[m.selectedPR].Repository, items[m.selectedPR].Number)
+	}
+	return ""
+}
+
+func (m model) selectedIssueKey() string {
+	if m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
+		issue := m.issues[m.selectedIssue]
+		return fmt.Sprintf("%s#%d", issue.Repository, issue.Number)
+	}
+	return ""
+}
+
+func (m model) selectedNotificationID() string {
+	if m.selectedNotification >= 0 && m.selectedNotification < len(m.notifications) {
+		return m.notifications[m.selectedNotification].ID
 	}
 	return ""
 }
@@ -211,6 +307,26 @@ func (m *model) restoreSelection(key string) {
 		}
 	}
 	m.clampSelectedPR()
+}
+
+func (m *model) restoreIssueSelection(key string) {
+	for i, issue := range m.issues {
+		if fmt.Sprintf("%s#%d", issue.Repository, issue.Number) == key {
+			m.selectedIssue = i
+			return
+		}
+	}
+	m.selectedIssue = min(max(0, m.selectedIssue), max(0, len(m.issues)-1))
+}
+
+func (m *model) restoreNotificationSelection(id string) {
+	for i, notification := range m.notifications {
+		if notification.ID == id {
+			m.selectedNotification = i
+			return
+		}
+	}
+	m.selectedNotification = min(max(0, m.selectedNotification), max(0, len(m.notifications)-1))
 }
 
 func dropLastRune(value string) string {

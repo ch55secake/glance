@@ -31,8 +31,11 @@ list and `q` to quit. The Pull requests section loads open PRs from repositories
 you own, collaborate on, or can access through an organization. Navigate with
 up/down or `j`/`k`, search with `/`, and filter with `a` (all), `m` (authored by
 you), or `d` (drafts). Press `esc` to clear the active search and filter, or `r`
-to refresh. The Overview shows the authenticated user and PR counts. PR details
-and actions are not yet available.
+to refresh. The Issues section lists open issues across accessible repositories
+with labels and comment counts. Notifications shows read and unread threads and
+their reasons; use up/down or `j`/`k` to navigate either list. Overview shows
+counts for PRs, issues, and unread notifications. PR details and actions are not
+yet available.
 
 Build the executable with:
 

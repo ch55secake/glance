@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,8 +92,9 @@ func TestGitHubAPIErrorIsShownInOverview(t *testing.T) {
 
 func TestInitLoadsViewerThroughGhAPI(t *testing.T) {
 	runner := &modelTestRunner{responses: map[string][]byte{
-		"user":       []byte(`{"login":"octocat"}`),
-		"user/repos": []byte(`[]`),
+		"user":          []byte(`{"login":"octocat"}`),
+		"user/repos":    []byte(`[]`),
+		"notifications": []byte(`[]`),
 	}}
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
@@ -108,13 +110,50 @@ func TestInitLoadsViewerThroughGhAPI(t *testing.T) {
 	if msg.viewer.Login != "octocat" || len(msg.pullRequests) != 0 {
 		t.Fatalf("dashboard result = %+v, want viewer and empty pull request list", msg)
 	}
-	if len(runner.calls) != 2 || runner.calls[0][1] != "user" || runner.calls[1][len(runner.calls[1])-1] != "user/repos" {
-		t.Fatalf("gh calls = %#v, want viewer and paginated repositories requests", runner.calls)
+	if len(runner.calls) != 4 || runner.calls[0][1] != "user" {
+		t.Fatalf("gh calls = %#v, want viewer and all three dashboard requests", runner.calls)
+	}
+	repoRequests, notificationRequests := 0, 0
+	for _, call := range runner.calls[1:] {
+		switch call[len(call)-1] {
+		case "user/repos":
+			repoRequests++
+		case "notifications":
+			notificationRequests++
+		}
+	}
+	if repoRequests != 2 || notificationRequests != 1 {
+		t.Fatalf("dashboard data calls = %#v, want two repository-backed requests and notifications", runner.calls)
 	}
 
 	updated, _ := m.Update(msg)
 	if view := updated.(model).View(); !strings.Contains(view, "Connected as @octocat") {
 		t.Errorf("view %q does not show the authenticated user", view)
+	}
+}
+
+func TestInitLoadsIssuesAndNotifications(t *testing.T) {
+	runner := &modelTestRunner{responses: map[string][]byte{
+		"user":                   []byte(`{"login":"octocat"}`),
+		"user/repos":             []byte(`[[{"name":"repo","full_name":"octo/repo","owner":{"login":"octo"},"has_issues":true}]]`),
+		"repos/octo/repo/pulls":  []byte(`[[{"number":1,"title":"PR","updated_at":"2026-10-21T12:00:00Z","user":{"login":"hubot"}}]]`),
+		"repos/octo/repo/issues": []byte(`[[{"number":2,"title":"Issue","state":"open","updated_at":"2026-10-21T13:00:00Z","user":{"login":"octocat"},"labels":[{"name":"bug"}],"comments":3}]]`),
+		"notifications":          []byte(`[[{"id":"thread-1","unread":true,"reason":"mention","updated_at":"2026-10-21T14:00:00Z","subject":{"title":"Review needed","type":"PullRequest"},"repository":{"full_name":"octo/repo"}}]]`),
+	}}
+	m := initialModel()
+	m.client = githubapi.NewClientWithRunner(runner)
+	msg, ok := m.Init()().(dashboardLoadedMsg)
+	if !ok {
+		t.Fatal("Init() did not return dashboardLoadedMsg")
+	}
+	if msg.err != nil || msg.pullRequestErr != nil || msg.issueErr != nil || msg.notificationErr != nil {
+		t.Fatalf("dashboard loading errors = viewer:%v PR:%v issue:%v notifications:%v", msg.err, msg.pullRequestErr, msg.issueErr, msg.notificationErr)
+	}
+	if len(msg.pullRequests) != 1 || len(msg.issues) != 1 || len(msg.notifications) != 1 {
+		t.Fatalf("loaded dashboard data: PRs=%d issues=%d notifications=%d", len(msg.pullRequests), len(msg.issues), len(msg.notifications))
+	}
+	if msg.issues[0].Repository != "octo/repo" || msg.notifications[0].Subject.Title != "Review needed" {
+		t.Fatalf("incorrect issue/notification data: %+v / %+v", msg.issues, msg.notifications)
 	}
 }
 
@@ -200,6 +239,80 @@ func TestPullRequestNavigationAndViewport(t *testing.T) {
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	if got := updated.(model).selectedPR; got != 4 {
 		t.Errorf("selected PR = %d after up, want 4", got)
+	}
+}
+
+func TestIssueAndNotificationScreens(t *testing.T) {
+	m := initialModel()
+	m.loading = false
+	m.activeSection = 2
+	m.issues = []githubapi.Issue{{
+		Number: 12, Title: "Document API behavior", Repository: "octo/docs", Comments: 3,
+		User: githubapi.User{Login: "octocat"}, Labels: []githubapi.Label{{Name: "documentation"}},
+	}}
+	issueView := m.View()
+	for _, text := range []string{"ISSUES", "1 open", "#12  octo/docs", "Document API behavior", "@octocat", "3 comments", "documentation"} {
+		if !strings.Contains(issueView, text) {
+			t.Errorf("issue view does not contain %q: %s", text, issueView)
+		}
+	}
+
+	m.activeSection = 3
+	m.notifications = []githubapi.Notification{{
+		ID: "thread-1", Unread: true, Reason: "review_requested", Repository: githubapi.NotificationRepository{FullName: "octo/docs"},
+		Subject: githubapi.NotificationSubject{Title: "Please review", Type: "PullRequest"},
+	}}
+	notificationView := m.View()
+	for _, text := range []string{"NOTIFICATIONS", "1 unread", "UNREAD", "octo/docs", "Please review", "review_requested"} {
+		if !strings.Contains(notificationView, text) {
+			t.Errorf("notification view does not contain %q: %s", text, notificationView)
+		}
+	}
+}
+
+func TestIssueAndNotificationNavigation(t *testing.T) {
+	m := initialModel()
+	m.loading = false
+	m.activeSection = 2
+	m.issues = []githubapi.Issue{{Number: 1}, {Number: 2}, {Number: 3}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if m.selectedIssue != 1 {
+		t.Fatalf("selected issue = %d, want 1", m.selectedIssue)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = updated.(model)
+	if m.selectedIssue != 2 {
+		t.Fatalf("selected issue = %d, want 2 after end", m.selectedIssue)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(model)
+	m.notifications = []githubapi.Notification{{ID: "a"}, {ID: "b"}}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := updated.(model).selectedNotification; got != 1 {
+		t.Fatalf("selected notification = %d, want 1", got)
+	}
+}
+
+func TestIssueAndNotificationErrorsAreIndependent(t *testing.T) {
+	m := initialModel()
+	m.loading = true
+	updated, _ := m.Update(dashboardLoadedMsg{
+		viewer:        githubapi.User{Login: "octocat"},
+		issueErr:      errors.New("issues unavailable"),
+		notifications: []githubapi.Notification{{ID: "thread-1", Unread: true, Repository: githubapi.NotificationRepository{FullName: "octo/repo"}, Subject: githubapi.NotificationSubject{Title: "Still available"}}},
+	})
+	m = updated.(model)
+	if m.issueError != "issues unavailable" || len(m.notifications) != 1 || m.notificationError != "" {
+		t.Fatalf("dataset errors interfered: issue=%q notification=%q data=%+v", m.issueError, m.notificationError, m.notifications)
+	}
+	m.activeSection = 2
+	if view := m.View(); !strings.Contains(view, "Could not load issues") || !strings.Contains(view, "issues unavailable") {
+		t.Errorf("issue view lost its API error: %s", view)
+	}
+	m.activeSection = 3
+	if view := m.View(); !strings.Contains(view, "Still available") {
+		t.Errorf("notification data hidden by issue error: %s", view)
 	}
 }
 
@@ -299,6 +412,10 @@ func TestRefreshPreservesSelectionAndIgnoresStaleResponse(t *testing.T) {
 	m.activeSection = 1
 	m.pullRequests = []githubapi.PullRequest{{Repository: "team/a", Number: 1}, {Repository: "team/b", Number: 2}}
 	m.selectedPR = 1
+	m.issues = []githubapi.Issue{{Repository: "team/a", Number: 3}, {Repository: "team/b", Number: 4}}
+	m.selectedIssue = 1
+	m.notifications = []githubapi.Notification{{ID: "thread-a"}, {ID: "thread-b"}}
+	m.selectedNotification = 1
 	updated, _ := m.Update(key("r"))
 	m = updated.(model)
 	if !m.loading || m.requestID != 1 || m.selectedPR != 1 {
@@ -309,11 +426,14 @@ func TestRefreshPreservesSelectionAndIgnoresStaleResponse(t *testing.T) {
 	if !m.loading || m.apiError != "" {
 		t.Fatalf("stale response changed state: %+v", m)
 	}
-	updated, _ = m.Update(dashboardLoadedMsg{requestID: 1, pullRequests: []githubapi.PullRequest{
-		{Repository: "team/b", Number: 2}, {Repository: "team/a", Number: 1},
-	}})
+	updated, _ = m.Update(dashboardLoadedMsg{
+		requestID:     1,
+		pullRequests:  []githubapi.PullRequest{{Repository: "team/b", Number: 2}, {Repository: "team/a", Number: 1}},
+		issues:        []githubapi.Issue{{Repository: "team/b", Number: 4}, {Repository: "team/a", Number: 3}},
+		notifications: []githubapi.Notification{{ID: "thread-b"}, {ID: "thread-a"}},
+	})
 	m = updated.(model)
-	if m.loading || m.selectedPR != 0 || m.pullRequests[0].Repository != "team/b" {
+	if m.loading || m.selectedPR != 0 || m.selectedIssue != 0 || m.selectedNotification != 0 {
 		t.Fatalf("refreshed selection not preserved: %+v", m)
 	}
 }
@@ -356,7 +476,7 @@ func TestHelpOverlay(t *testing.T) {
 
 func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
-		for _, state := range []string{"overview", "list", "search", "help", "error", "empty"} {
+		for _, state := range []string{"overview", "list", "search", "help", "error", "empty", "issues", "notifications", "issue-error", "notification-error"} {
 			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, state), func(t *testing.T) {
 				m := initialModel()
 				m.width, m.height = size.width, size.height
@@ -385,6 +505,18 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 				case "empty":
 					m.pullRequests = nil
 					m.activeSection = 1
+				case "issues":
+					m.activeSection = 2
+					m.issues = []githubapi.Issue{{Number: 13, Repository: "company/project", Title: "An issue title", User: githubapi.User{Login: "octocat"}}}
+				case "notifications":
+					m.activeSection = 3
+					m.notifications = []githubapi.Notification{{ID: "one", Unread: true, Repository: githubapi.NotificationRepository{FullName: "company/project"}, Subject: githubapi.NotificationSubject{Type: "Issue", Title: "A notification title"}}}
+				case "issue-error":
+					m.activeSection = 2
+					m.issueError = "GitHub denied access; check repository access and the permissions granted to gh."
+				case "notification-error":
+					m.activeSection = 3
+					m.notificationError = "GitHub denied access; check repository access and the permissions granted to gh."
 				}
 				view := m.View()
 				for _, line := range strings.Split(view, "\n") {
@@ -396,6 +528,23 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 					t.Errorf("view uses %d rows, terminal has %d:\n%s", lines, size.height, view)
 				}
 			})
+		}
+	}
+}
+
+func TestIssueAndNotificationEmptyStates(t *testing.T) {
+	m := initialModel()
+	m.loading = false
+	for _, tc := range []struct {
+		section int
+		want    string
+	}{
+		{section: 2, want: "No open issues found"},
+		{section: 3, want: "No notifications were found"},
+	} {
+		m.activeSection = tc.section
+		if view := m.View(); !strings.Contains(view, tc.want) {
+			t.Errorf("section %d empty state missing %q: %s", tc.section, tc.want, view)
 		}
 	}
 }
@@ -437,6 +586,7 @@ func TestStatusColorsAndMonochromeFallback(t *testing.T) {
 }
 
 type modelTestRunner struct {
+	mu        sync.Mutex
 	responses map[string][]byte
 	stderr    []byte
 	err       error
@@ -444,6 +594,8 @@ type modelTestRunner struct {
 }
 
 func (r *modelTestRunner) Run(_ context.Context, args ...string) ([]byte, []byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, append([]string(nil), args...))
 	return r.responses[args[len(args)-1]], r.stderr, r.err
 }
