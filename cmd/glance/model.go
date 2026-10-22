@@ -28,6 +28,7 @@ type model struct {
 	loading       bool
 	viewer        githubapi.User
 	apiError      string
+	client        *githubapi.Client
 }
 
 type viewerLoadedMsg struct {
@@ -36,11 +37,17 @@ type viewerLoadedMsg struct {
 }
 
 func initialModel() model {
-	return model{width: 80, loading: true}
+	return model{width: 80, loading: true, client: githubapi.NewClient()}
 }
 
 func (m model) Init() tea.Cmd {
-	return loadViewer
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		viewer, err := m.client.Viewer(ctx)
+		return viewerLoadedMsg{viewer: viewer, err: err}
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -67,19 +74,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
-}
-
-func loadViewer() tea.Msg {
-	client, err := githubapi.NewClientFromEnv()
-	if err != nil {
-		return viewerLoadedMsg{err: err}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	viewer, err := client.Viewer(ctx)
-	return viewerLoadedMsg{viewer: viewer, err: err}
 }
 
 func (m model) View() string {
@@ -127,7 +121,7 @@ func (m model) sectionContent() string {
 		case m.viewer.Login != "":
 			return content + "\n\nConnected as @" + m.viewer.Login + ".\nPull request views are coming next."
 		default:
-			return content + "\n\nSet GLANCE_GITHUB_TOKEN to connect to GitHub."
+			return content + "\n\nAuthenticate with `gh auth login` to connect to GitHub."
 		}
 	case 1:
 		return "No pull requests loaded yet."
