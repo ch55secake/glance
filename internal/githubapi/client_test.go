@@ -56,6 +56,130 @@ func TestListPullRequestsRejectsInvalidPathSegments(t *testing.T) {
 	}
 }
 
+func TestGetPullRequestDetailsLoadsReviewStatusChecksAndMergeMethods(t *testing.T) {
+	runner := &routingRunner{responses: map[string][]byte{
+		"repos/octo/project/pulls/42":                  []byte(`{"number":42,"title":"Useful change","state":"open","body":"Description","user":{"login":"octocat"},"head":{"ref":"feature","sha":"abc123"},"base":{"ref":"main","sha":"def456"},"requested_reviewers":[{"login":"hubot"}],"mergeable":true,"mergeable_state":"clean"}`),
+		"repos/octo/project/pulls/42/reviews":          []byte(`[[{"user":{"login":"reviewer"},"state":"APPROVED","submitted_at":"2026-10-21T12:00:00Z"}]]`),
+		"repos/octo/project/commits/abc123/check-runs": []byte(`[{"total_count":1,"check_runs":[{"name":"CI","status":"completed","conclusion":"success"}]}]`),
+		"repos/octo/project":                           []byte(`{"allow_merge_commit":true,"allow_squash_merge":false,"allow_rebase_merge":true}`),
+	}}
+	details, err := NewClientWithRunner(runner).GetPullRequestDetails(context.Background(), "octo", "project", 42)
+	if err != nil {
+		t.Fatalf("GetPullRequestDetails() error = %v", err)
+	}
+	if details.Number != 42 || details.Repository != "octo/project" || details.Body != "Description" || details.Head.SHA != "abc123" {
+		t.Fatalf("pull request details = %+v", details)
+	}
+	if len(details.RequestedReviewers) != 1 || len(details.Reviews) != 1 || details.Reviews[0].State != "APPROVED" {
+		t.Errorf("review metadata = %+v", details)
+	}
+	if len(details.CheckRuns) != 1 || details.CheckRuns[0].Conclusion != "success" {
+		t.Errorf("check runs = %+v", details.CheckRuns)
+	}
+	if !reflect.DeepEqual(details.AllowedMergeMethods, []MergeMethod{MergeCommit, MergeRebase}) {
+		t.Errorf("allowed merge methods = %#v", details.AllowedMergeMethods)
+	}
+	if details.ReviewsError != "" || details.ChecksError != "" || details.MergeMethodsError != "" {
+		t.Errorf("optional detail errors = reviews:%q checks:%q methods:%q", details.ReviewsError, details.ChecksError, details.MergeMethodsError)
+	}
+}
+
+func TestGetPullRequestDetailsKeepsMainDetailsWhenOptionalRequestsFail(t *testing.T) {
+	runner := &routingRunner{
+		responses: map[string][]byte{
+			"repos/octo/project/pulls/42": []byte(`{"number":42,"state":"open","head":{"sha":"abc123"}}`),
+		},
+		stderrs: map[string][]byte{
+			"repos/octo/project/pulls/42/reviews":          []byte("HTTP 403: Resource not accessible"),
+			"repos/octo/project/commits/abc123/check-runs": []byte("HTTP 403: Resource not accessible"),
+			"repos/octo/project":                           []byte("HTTP 403: Resource not accessible"),
+		},
+		errors: map[string]error{
+			"repos/octo/project/pulls/42/reviews":          errors.New("exit status 1"),
+			"repos/octo/project/commits/abc123/check-runs": errors.New("exit status 1"),
+			"repos/octo/project":                           errors.New("exit status 1"),
+		},
+	}
+	details, err := NewClientWithRunner(runner).GetPullRequestDetails(context.Background(), "octo", "project", 42)
+	if err != nil || details.Number != 42 {
+		t.Fatalf("GetPullRequestDetails() details=%+v error=%v; expected main details despite optional errors", details, err)
+	}
+	if details.ReviewsError == "" || details.ChecksError == "" || details.MergeMethodsError == "" {
+		t.Errorf("optional failures were not retained: %+v", details)
+	}
+}
+
+func TestGetPullRequestDetailsRejectsInvalidArguments(t *testing.T) {
+	runner := &stubRunner{}
+	for _, tc := range []struct {
+		owner, repository string
+		number            int
+	}{{"octo/team", "project", 42}, {"octo", "project", 0}} {
+		if _, err := NewClientWithRunner(runner).GetPullRequestDetails(context.Background(), tc.owner, tc.repository, tc.number); err == nil {
+			t.Errorf("GetPullRequestDetails(%q, %q, %d) error = nil", tc.owner, tc.repository, tc.number)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("invalid arguments invoked gh: %#v", runner.calls)
+	}
+}
+
+func TestMergePullRequestUsesExpectedHeadAndMethod(t *testing.T) {
+	runner := &stubRunner{stdout: []byte(`{"sha":"merged123","merged":true,"message":"Pull Request successfully merged"}`)}
+	result, err := NewClientWithRunner(runner).MergePullRequest(context.Background(), "octo", "project", 42, MergeSquash, "head123")
+	if err != nil {
+		t.Fatalf("MergePullRequest() error = %v", err)
+	}
+	if !result.Merged || result.SHA != "merged123" {
+		t.Fatalf("MergePullRequest() = %+v", result)
+	}
+	want := [][]string{{"api", "-X", "PUT", "-F", "sha=head123", "-F", "merge_method=squash", "repos/octo/project/pulls/42/merge"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Errorf("gh calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestMergePullRequestRequiresValidMethodAndHeadSHA(t *testing.T) {
+	runner := &stubRunner{}
+	client := NewClientWithRunner(runner)
+	for _, tc := range []struct {
+		method MergeMethod
+		sha    string
+	}{{MergeMethod("invalid"), "head"}, {MergeSquash, ""}} {
+		if _, err := client.MergePullRequest(context.Background(), "octo", "project", 42, tc.method, tc.sha); err == nil {
+			t.Errorf("MergePullRequest(%q, %q) error = nil", tc.method, tc.sha)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("invalid merge request invoked gh: %#v", runner.calls)
+	}
+}
+
+func TestMergePullRequestExplainsGitHubFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{name: "stale head", stderr: "HTTP 409: Head branch was modified. Review and try the merge again.", want: "changed since it was loaded"},
+		{name: "branch protection", stderr: "HTTP 405: Protected branch update failed; required status checks are pending", want: "branch protection is blocking"},
+		{name: "conflict", stderr: "HTTP 405: Pull Request is not mergeable", want: "resolve conflicts"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{stderr: []byte(tc.stderr), err: errors.New("exit status 1")}
+			_, err := NewClientWithRunner(runner).MergePullRequest(context.Background(), "octo", "project", 42, MergeCommit, "head123")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("MergePullRequest() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	refused := &stubRunner{stdout: []byte(`{"merged":false,"message":"Pull Request is not mergeable"}`)}
+	if _, err := NewClientWithRunner(refused).MergePullRequest(context.Background(), "octo", "project", 42, MergeCommit, "head123"); err == nil || !strings.Contains(err.Error(), "not mergeable") {
+		t.Fatalf("MergePullRequest() refusal error = %v, want GitHub response", err)
+	}
+}
+
 func TestListRepositoriesUsesPaginationAndAllAffiliations(t *testing.T) {
 	runner := &stubRunner{stdout: []byte(`[[{"name":"one","full_name":"octo/one","owner":{"login":"octo"}}],[{"name":"two","full_name":"octo/two","owner":{"login":"octo"}}]]`)}
 	repositories, err := NewClientWithRunner(runner).ListRepositories(context.Background())

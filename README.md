@@ -3,7 +3,8 @@
 `glance` is a Go-based GitHub dashboard, intended to keep common work in the
 dashboard instead of sending you away to run interactive `gh` commands. The
 pull request screen lists open pull requests across repositories visible to the
-authenticated account. Pull request details and actions are still in progress.
+authenticated account. Open a PR in the TUI to review its description, branches,
+reviewers, reviews, checks, and mergeability; merge it without leaving glance.
 
 ## Requirements
 
@@ -31,11 +32,14 @@ list and `q` to quit. The Pull requests section loads open PRs from repositories
 you own, collaborate on, or can access through an organization. Navigate with
 up/down or `j`/`k`, search with `/`, and filter with `a` (all), `m` (authored by
 you), or `d` (drafts). Press `esc` to clear the active search and filter, or `r`
-to refresh. The Issues section lists open issues across accessible repositories
-with labels and comment counts. Notifications shows read and unread threads and
-their reasons; use up/down or `j`/`k` to navigate either list. Overview shows
-counts for PRs, issues, and unread notifications. PR details and actions are not
-yet available.
+to refresh. Press `enter` on a PR to open its details; use up/down or `j`/`k` to
+scroll and `esc` to return to the same inbox position. Press `m` to select an
+enabled merge method, then confirm with `y`. glance sends the merge through the
+GitHub API using the loaded head SHA and refreshes the dashboard afterwards.
+The Issues section lists open issues across accessible repositories with labels
+and comment counts. Notifications shows read and unread threads and their
+reasons; use up/down or `j`/`k` to navigate either list. Overview shows counts
+for PRs, issues, and unread notifications.
 
 Build the executable with:
 

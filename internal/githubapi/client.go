@@ -51,10 +51,72 @@ type PullRequest struct {
 	Title      string    `json:"title"`
 	State      string    `json:"state"`
 	Draft      bool      `json:"draft"`
+	Merged     bool      `json:"merged"`
 	HTMLURL    string    `json:"html_url"`
 	UpdatedAt  time.Time `json:"updated_at"`
 	User       User      `json:"user"`
 	Repository string    `json:"-"`
+}
+
+// PullRequestBranch is a base or head branch on a pull request.
+type PullRequestBranch struct {
+	Ref string `json:"ref"`
+	SHA string `json:"sha"`
+}
+
+// PullRequestReview is a review submitted for a pull request.
+type PullRequestReview struct {
+	User        User      `json:"user"`
+	State       string    `json:"state"`
+	SubmittedAt time.Time `json:"submitted_at"`
+}
+
+// CheckRun is a GitHub Actions or other check attached to the PR's head commit.
+type CheckRun struct {
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	HTMLURL     string     `json:"html_url"`
+	CompletedAt *time.Time `json:"completed_at"`
+}
+
+// PullRequestDetails contains the fields needed to review and merge a PR.
+type PullRequestDetails struct {
+	PullRequest
+	Body                string              `json:"body"`
+	Base                PullRequestBranch   `json:"base"`
+	Head                PullRequestBranch   `json:"head"`
+	RequestedReviewers  []User              `json:"requested_reviewers"`
+	Mergeable           *bool               `json:"mergeable"`
+	MergeableState      string              `json:"mergeable_state"`
+	AllowedMergeMethods []MergeMethod       `json:"-"`
+	Reviews             []PullRequestReview `json:"-"`
+	CheckRuns           []CheckRun          `json:"-"`
+	ReviewsError        string              `json:"-"`
+	ChecksError         string              `json:"-"`
+	MergeMethodsError   string              `json:"-"`
+}
+
+// MergeMethod is a supported GitHub pull request merge method.
+type MergeMethod string
+
+const (
+	MergeCommit MergeMethod = "merge"
+	MergeSquash MergeMethod = "squash"
+	MergeRebase MergeMethod = "rebase"
+)
+
+// MergeResult is GitHub's response after a successful merge.
+type MergeResult struct {
+	SHA     string `json:"sha"`
+	Merged  bool   `json:"merged"`
+	Message string `json:"message"`
+}
+
+type repositoryMergeSettings struct {
+	AllowMergeCommit bool `json:"allow_merge_commit"`
+	AllowSquashMerge bool `json:"allow_squash_merge"`
+	AllowRebaseMerge bool `json:"allow_rebase_merge"`
 }
 
 // Issue is an open GitHub issue. Pull requests are excluded from ListOpenIssues.
@@ -371,6 +433,165 @@ func (c *Client) ListPullRequests(ctx context.Context, owner, repository string)
 		return nil, err
 	}
 	return decodePaginated[PullRequest](stdout, "pull requests")
+}
+
+// GetPullRequestDetails returns review, branch, and check information for a PR.
+// Detail, review, and check requests are kept separate so a missing check or
+// review permission doesn't prevent the main PR content from being shown.
+func (c *Client) GetPullRequestDetails(ctx context.Context, owner, repository string, number int) (PullRequestDetails, error) {
+	if !validPathSegment(owner) || !validPathSegment(repository) || number < 1 {
+		return PullRequestDetails{}, errors.New("GitHub owner, repository, and pull request number must be valid")
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repository), number)
+	data, err := c.runAPI(ctx, endpoint)
+	if err != nil {
+		return PullRequestDetails{}, err
+	}
+	var details PullRequestDetails
+	if err := json.Unmarshal(data, &details); err != nil {
+		return PullRequestDetails{}, fmt.Errorf("decode gh api pull request details response: %w", err)
+	}
+	details.Repository = owner + "/" + repository
+
+	var requests sync.WaitGroup
+	requests.Add(3)
+	go func() {
+		defer requests.Done()
+		reviews, reviewsErr := c.listPullRequestReviews(ctx, owner, repository, number)
+		details.Reviews = reviews
+		if reviewsErr != nil {
+			details.ReviewsError = reviewsErr.Error()
+		}
+	}()
+	go func() {
+		defer requests.Done()
+		if details.Head.SHA == "" {
+			details.ChecksError = "GitHub did not return the pull request head SHA."
+			return
+		}
+		checkRuns, checksErr := c.listCheckRuns(ctx, owner, repository, details.Head.SHA)
+		details.CheckRuns = checkRuns
+		if checksErr != nil {
+			details.ChecksError = checksErr.Error()
+		}
+	}()
+	go func() {
+		defer requests.Done()
+		settings, settingsErr := c.getRepositoryMergeSettings(ctx, owner, repository)
+		if settingsErr != nil {
+			details.MergeMethodsError = settingsErr.Error()
+			return
+		}
+		if settings.AllowMergeCommit {
+			details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeCommit)
+		}
+		if settings.AllowSquashMerge {
+			details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeSquash)
+		}
+		if settings.AllowRebaseMerge {
+			details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeRebase)
+		}
+	}()
+	requests.Wait()
+	sort.Slice(details.Reviews, func(i, j int) bool {
+		return details.Reviews[i].SubmittedAt.After(details.Reviews[j].SubmittedAt)
+	})
+	return details, nil
+}
+
+func (c *Client) getRepositoryMergeSettings(ctx context.Context, owner, repository string) (repositoryMergeSettings, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repository))
+	data, err := c.runAPI(ctx, endpoint)
+	if err != nil {
+		return repositoryMergeSettings{}, err
+	}
+	var settings repositoryMergeSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return repositoryMergeSettings{}, fmt.Errorf("decode gh api repository merge settings response: %w", err)
+	}
+	return settings, nil
+}
+
+// MergePullRequest merges a pull request if its head still matches expectedSHA.
+func (c *Client) MergePullRequest(ctx context.Context, owner, repository string, number int, method MergeMethod, expectedSHA string) (MergeResult, error) {
+	if !validPathSegment(owner) || !validPathSegment(repository) || number < 1 {
+		return MergeResult{}, errors.New("GitHub owner, repository, and pull request number must be valid")
+	}
+	if strings.TrimSpace(expectedSHA) == "" {
+		return MergeResult{}, errors.New("a current pull request head SHA is required to merge safely")
+	}
+	switch method {
+	case MergeCommit, MergeSquash, MergeRebase:
+	default:
+		return MergeResult{}, fmt.Errorf("unsupported pull request merge method %q", method)
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/merge", url.PathEscape(owner), url.PathEscape(repository), number)
+	stdout, stderr, err := c.runner.Run(ctx,
+		"api", "-X", "PUT",
+		"-F", "sha="+expectedSHA,
+		"-F", "merge_method="+string(method),
+		endpoint,
+	)
+	if err != nil {
+		return MergeResult{}, fmt.Errorf("merge pull request: %w", newMergeCommandError(stderr, err))
+	}
+	var result MergeResult
+	if err := json.Unmarshal(stdout, &result); err != nil {
+		return MergeResult{}, fmt.Errorf("decode gh api merge response: %w", err)
+	}
+	if !result.Merged {
+		message := strings.TrimSpace(result.Message)
+		if message == "" {
+			message = "GitHub did not merge the pull request. Check required reviews, status checks, branch protection, and merge conflicts."
+		}
+		return result, errors.New(message)
+	}
+	return result, nil
+}
+
+func newMergeCommandError(stderr []byte, err error) error {
+	detail := strings.TrimSpace(string(stderr))
+	lower := strings.ToLower(detail)
+	switch {
+	case strings.Contains(lower, "head branch was modified"), strings.Contains(lower, "head sha"),
+		strings.Contains(lower, "sha does not match"), strings.Contains(lower, "sha was updated"):
+		return fmt.Errorf("the pull request changed since it was loaded; refresh the PR and try again")
+	case strings.Contains(lower, "not mergeable"), strings.Contains(lower, "merge conflict"), strings.Contains(lower, "conflict"):
+		return fmt.Errorf("GitHub cannot merge this pull request yet; resolve conflicts and check its mergeability")
+	case strings.Contains(lower, "required status checks"), strings.Contains(lower, "required review"),
+		strings.Contains(lower, "protected branch"), strings.Contains(lower, "branch protection"):
+		return fmt.Errorf("branch protection is blocking this merge; satisfy required reviews and status checks")
+	default:
+		return newCommandError(stderr, err)
+	}
+}
+
+func (c *Client) listPullRequestReviews(ctx context.Context, owner, repository string, number int) ([]PullRequestReview, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", url.PathEscape(owner), url.PathEscape(repository), number)
+	stdout, err := c.runPaginated(ctx, endpoint, fmt.Sprintf("per_page=%d", pageSize))
+	if err != nil {
+		return nil, err
+	}
+	return decodePaginated[PullRequestReview](stdout, "pull request reviews")
+}
+
+func (c *Client) listCheckRuns(ctx context.Context, owner, repository, sha string) ([]CheckRun, error) {
+	endpoint := "repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repository) + "/commits/" + url.PathEscape(sha) + "/check-runs"
+	stdout, err := c.runPaginated(ctx, endpoint, fmt.Sprintf("per_page=%d", pageSize))
+	if err != nil {
+		return nil, err
+	}
+	var pages []struct {
+		CheckRuns []CheckRun `json:"check_runs"`
+	}
+	if err := json.Unmarshal(stdout, &pages); err != nil {
+		return nil, fmt.Errorf("decode gh api check runs response: %w", err)
+	}
+	checkRuns := make([]CheckRun, 0)
+	for _, page := range pages {
+		checkRuns = append(checkRuns, page.CheckRuns...)
+	}
+	return checkRuns, nil
 }
 
 func (c *Client) runAPI(ctx context.Context, endpoint string) ([]byte, error) {
