@@ -10,11 +10,16 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
-const pageSize = 100
+const (
+	pageSize                  = 100
+	maxConcurrentRepoRequests = 5
+)
 
 // Runner executes a non-interactive gh command and returns its output.
 type Runner interface {
@@ -32,15 +37,23 @@ type User struct {
 	Name  string `json:"name"`
 }
 
+// Repository is a repository visible to the authenticated user.
+type Repository struct {
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Owner    User   `json:"owner"`
+}
+
 // PullRequest contains the fields needed to display a pull request in glance.
 type PullRequest struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	State     string    `json:"state"`
-	Draft     bool      `json:"draft"`
-	HTMLURL   string    `json:"html_url"`
-	UpdatedAt time.Time `json:"updated_at"`
-	User      User      `json:"user"`
+	Number     int       `json:"number"`
+	Title      string    `json:"title"`
+	State      string    `json:"state"`
+	Draft      bool      `json:"draft"`
+	HTMLURL    string    `json:"html_url"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	User       User      `json:"user"`
+	Repository string    `json:"-"`
 }
 
 // CommandError describes a failure while invoking gh api.
@@ -103,6 +116,111 @@ func (c *Client) Viewer(ctx context.Context) (User, error) {
 		return User{}, fmt.Errorf("decode gh api user response: %w", err)
 	}
 	return user, nil
+}
+
+// ListRepositories returns all repositories visible to the authenticated user.
+func (c *Client) ListRepositories(ctx context.Context) ([]Repository, error) {
+	stdout, stderr, err := c.runner.Run(
+		ctx,
+		"api",
+		"--paginate",
+		"--slurp",
+		"-X", "GET",
+		"-F", "affiliation=owner,collaborator,organization_member",
+		"-F", fmt.Sprintf("per_page=%d", pageSize),
+		"user/repos",
+	)
+	if err != nil {
+		return nil, newCommandError(stderr, err)
+	}
+
+	var pages [][]Repository
+	if err := json.Unmarshal(stdout, &pages); err != nil {
+		return nil, fmt.Errorf("decode gh api repositories response: %w", err)
+	}
+
+	repositories := make([]Repository, 0)
+	for _, page := range pages {
+		repositories = append(repositories, page...)
+	}
+	return repositories, nil
+}
+
+// ListOpenPullRequests returns open pull requests across all visible repositories.
+func (c *Client) ListOpenPullRequests(ctx context.Context) ([]PullRequest, error) {
+	repositories, err := c.ListRepositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(repositories) == 0 {
+		return []PullRequest{}, nil
+	}
+
+	workerCount := min(maxConcurrentRepoRequests, len(repositories))
+	requestCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type repoResult struct {
+		pullRequests []PullRequest
+		err          error
+	}
+	jobs := make(chan Repository, len(repositories))
+	results := make(chan repoResult, len(repositories))
+	for _, repository := range repositories {
+		jobs <- repository
+	}
+	close(jobs)
+
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for repository := range jobs {
+				pullRequests, requestErr := c.ListPullRequests(requestCtx, repository.Owner.Login, repository.Name)
+				if requestErr != nil {
+					results <- repoResult{err: fmt.Errorf("list pull requests for %s: %w", repository.FullName, requestErr)}
+					cancel()
+					return
+				}
+				for i := range pullRequests {
+					pullRequests[i].Repository = repository.FullName
+				}
+				results <- repoResult{pullRequests: pullRequests}
+			}
+		}()
+	}
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	allPullRequests := make([]PullRequest, 0)
+	var firstErr error
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
+		}
+		allPullRequests = append(allPullRequests, result.pullRequests...)
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	sort.Slice(allPullRequests, func(i, j int) bool {
+		left, right := allPullRequests[i], allPullRequests[j]
+		if !left.UpdatedAt.Equal(right.UpdatedAt) {
+			return left.UpdatedAt.After(right.UpdatedAt)
+		}
+		if left.Repository != right.Repository {
+			return left.Repository < right.Repository
+		}
+		return left.Number > right.Number
+	})
+	return allPullRequests, nil
 }
 
 // ListPullRequests returns all open pull requests for a repository.

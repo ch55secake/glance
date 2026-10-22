@@ -2,8 +2,8 @@
 
 `glance` is a Go-based GitHub dashboard, intended to keep common work in the
 dashboard instead of sending you away to run interactive `gh` commands. The
-project is at its initial scaffold stage; pull request listing and actions are
-still in progress.
+pull request screen lists open pull requests across repositories visible to the
+authenticated account. Pull request details and actions are still in progress.
 
 ## Requirements
 
@@ -26,10 +26,11 @@ commands while you use the TUI.
 go run ./cmd/glance
 ```
 
-The initial TUI is a placeholder shell. Use the left/right arrow keys or `h`/`l`
-to switch sections, and `q` to quit. The Overview checks your GitHub CLI
-authentication with `gh api user` and shows the authenticated user; PR listing
-and actions are not implemented yet.
+Use the left/right arrow keys or `h`/`l` to switch sections, and `q` to quit.
+The Pull requests section loads open PRs from repositories you own, collaborate
+on, or can access through an organization. Use up/down or `j`/`k` to move through
+the list, and `r` to refresh. The Overview shows the authenticated user and the
+number of loaded pull requests.
 
 Build the executable with:
 
