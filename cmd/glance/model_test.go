@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -239,6 +240,297 @@ func TestPullRequestNavigationAndViewport(t *testing.T) {
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	if got := updated.(model).selectedPR; got != 4 {
 		t.Errorf("selected PR = %d after up, want 4", got)
+	}
+}
+
+func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
+	runner := &modelTestRunner{responses: map[string][]byte{
+		"repos/octo/project/pulls/42":                  []byte(`{"number":42,"title":"Useful change","state":"open","body":"A detailed description.\nSecond paragraph.","updated_at":"2026-10-21T12:00:00Z","user":{"login":"octocat"},"head":{"ref":"feature","sha":"abc123"},"base":{"ref":"main","sha":"def456"},"requested_reviewers":[{"login":"hubot"}],"mergeable":true,"mergeable_state":"clean"}`),
+		"repos/octo/project/pulls/42/reviews":          []byte(`[[{"user":{"login":"reviewer"},"state":"APPROVED","submitted_at":"2026-10-21T12:00:00Z"}]]`),
+		"repos/octo/project/commits/abc123/check-runs": []byte(`[{"total_count":1,"check_runs":[{"name":"CI","status":"completed","conclusion":"success"}]}]`),
+		"repos/octo/project":                           []byte(`{"allow_merge_commit":true,"allow_squash_merge":true,"allow_rebase_merge":false}`),
+		"repos/octo/project/pulls/42/files":            []byte(`[[{"filename":"README.md","status":"modified","additions":1,"deletions":0,"patch":"@@ -1 +1 @@\n+review diff"}]]`),
+	}}
+	m := initialModel()
+	m.client = githubapi.NewClientWithRunner(runner)
+	m.loading = false
+	m.activeSection = 1
+	m.viewer.Login = "octocat"
+	m.filter = minePRs
+	m.query = "useful"
+	m.pullRequests = []githubapi.PullRequest{{Number: 42, Title: "Useful change", Repository: "octo/project", User: githubapi.User{Login: "octocat"}}}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd == nil || !m.detailOpen || m.detailKey != "octo/project#42" {
+		t.Fatalf("enter did not open selected PR: state=%+v command=%v", m, cmd != nil)
+	}
+	if m.searching || m.filter != minePRs || m.query != "useful" {
+		t.Fatalf("opening details changed list filters/search: %+v", m)
+	}
+	result := cmd()
+	batch, ok := result.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("details command returned %T, want batch of details and diff requests", result)
+	}
+	for _, load := range batch {
+		updated, _ = m.Update(load())
+		m = updated.(model)
+	}
+	if m.detailLoading || m.detailError != "" || m.prDetails.Head.SHA != "abc123" || !m.diffLoaded || m.diffLoading {
+		t.Fatalf("details were not loaded: %+v", m)
+	}
+	view := strings.Join(m.pullRequestDetailsView(76), "\n")
+	for _, text := range []string{"octo/project#42", "Useful change", "Branches: feature", "main", "@hubot", "APPROVED", "CI: SUCCESS", "A detailed description."} {
+		if !strings.Contains(view, text) {
+			t.Errorf("details view missing %q: %s", text, view)
+		}
+	}
+	if !strings.Contains(view, "review diff") {
+		t.Errorf("diff was not rendered automatically in the PR details: %s", view)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	back := updated.(model)
+	if back.detailOpen || back.selectedPR != 0 || back.filter != minePRs || back.query != "useful" {
+		t.Fatalf("returning from detail lost inbox state: %+v", back)
+	}
+}
+
+func TestOpeningPullRequestAutomaticallyLoadsContinuousDiff(t *testing.T) {
+	files := []githubapi.PullRequestFile{
+		{Filename: "README.md", Status: "modified", Additions: 1, Deletions: 1, Patch: "@@ -1 +1 @@\n-old text\n+new text" + strings.Repeat("\n context line", 35)},
+		{Filename: "src/app.go", Status: "added", Additions: 2, Patch: "@@ -0,0 +1,2 @@\n+package app\n+func Run() {}"},
+	}
+	page, err := json.Marshal(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &modelTestRunner{responses: map[string][]byte{
+		"repos/octo/project/pulls/42":                   []byte(`{"number":42,"title":"Review me","state":"open","body":"PR details","user":{"login":"octocat"},"head":{"ref":"feature","sha":"headsha"},"base":{"ref":"main","sha":"basesha"}}`),
+		"repos/octo/project/pulls/42/reviews":           []byte(`[]`),
+		"repos/octo/project/commits/headsha/check-runs": []byte(`[{"total_count":0,"check_runs":[]}]`),
+		"repos/octo/project":                            []byte(`{"allow_merge_commit":true}`),
+		"repos/octo/project/pulls/42/files":             []byte("[" + string(page) + "]"),
+	}}
+	m := initialModel()
+	m.client = githubapi.NewClientWithRunner(runner)
+	m.loading = false
+	m.activeSection = 1
+	m.pullRequests = []githubapi.PullRequest{{Number: 42, Title: "Review me", Repository: "octo/project"}}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd == nil || !m.detailOpen || !m.diffLoading || len(runner.calls) != 0 {
+		t.Fatalf("opening PR did not start loading the diff: state=%+v calls=%#v command=%v", m, runner.calls, cmd != nil)
+	}
+	batchResult := cmd()
+	batch, ok := batchResult.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("open PR command returned %T, want batch", batchResult)
+	}
+	for _, load := range batch {
+		updated, _ = m.Update(load())
+		m = updated.(model)
+	}
+	if !m.diffLoaded || m.diffLoading || len(m.diffFiles) != 2 {
+		t.Fatalf("changed files were not loaded: %+v", m)
+	}
+	fullDiff := strings.Join(m.pullRequestDetailsView(76), "\n")
+	for _, text := range []string{"CHANGED FILES", "README.md", "File 1/2", "-old text", "+new text", "src/app.go", "File 2/2", "+func Run() {}"} {
+		if !strings.Contains(fullDiff, text) {
+			t.Errorf("continuous diff missing %q: %s", text, fullDiff)
+		}
+	}
+	view := m.View()
+	for _, text := range []string{"CHANGED FILES", "README.md"} {
+		if !strings.Contains(view, text) {
+			t.Errorf("diff view missing %q: %s", text, view)
+		}
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = updated.(model)
+	if m.detailScroll == 0 || !strings.Contains(m.View(), "src/app.go") || !strings.Contains(m.View(), "package app") {
+		t.Fatalf("scrolling did not reach the next file: scroll=%d view=%s", m.detailScroll, m.View())
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(model)
+	if m.detailOpen || !m.diffLoaded {
+		t.Fatalf("returning to the inbox lost loaded diff: %+v", m)
+	}
+}
+
+func TestPullRequestDiffLayoutsAndUnavailablePatches(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
+		for _, state := range []string{"normal", "binary", "error"} {
+			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, state), func(t *testing.T) {
+				m := initialModel()
+				m.width, m.height = size.width, size.height
+				m.detailOpen = true
+				m.diffLoaded = true
+				m.detailKey = "octo/project#42"
+				m.prDetails = githubapi.PullRequestDetails{PullRequest: githubapi.PullRequest{Number: 42, Repository: "octo/project", State: "open"}}
+				m.diffFiles = []githubapi.PullRequestFile{{
+					Filename: "src/a-very-long-file-name.go", Status: "modified", Additions: 2, Deletions: 1,
+					Patch: "@@ -1,3 +1,4 @@\n package main\n-old(" + strings.Repeat("x", 120) + ")\n+new(" + strings.Repeat("y", 120) + ")",
+				}}
+				if state == "binary" {
+					m.diffFiles[0].Patch = ""
+				}
+				if state == "error" {
+					m.diffError = strings.Repeat("GitHub denied access; check repository access and permissions. ", 3)
+				}
+				view := m.View()
+				for _, line := range strings.Split(view, "\n") {
+					if got := lipgloss.Width(line); got > size.width {
+						t.Errorf("line width %d exceeds terminal: %q", got, line)
+					}
+				}
+				if lines := strings.Count(view, "\n") + 1; lines > size.height {
+					t.Errorf("view uses %d rows, terminal has %d", lines, size.height)
+				}
+				if state == "binary" && !strings.Contains(strings.Join(m.pullRequestDetailsView(size.width-4), "\n"), "GitHub did not provide") {
+					t.Error("missing explanation for unavailable patch")
+				}
+			})
+		}
+	}
+}
+
+func TestMergeFlowRequiresMethodChoiceAndConfirmation(t *testing.T) {
+	runner := &modelTestRunner{responses: map[string][]byte{
+		"repos/octo/project/pulls/42/merge": []byte(`{"sha":"merged123","merged":true,"message":"Pull Request successfully merged"}`),
+	}}
+	m := initialModel()
+	m.client = githubapi.NewClientWithRunner(runner)
+	m.detailOpen = true
+	m.detailKey = "octo/project#42"
+	mergeable := true
+	m.prDetails = githubapi.PullRequestDetails{
+		PullRequest: githubapi.PullRequest{Number: 42, Repository: "octo/project", State: "open"},
+		Head:        githubapi.PullRequestBranch{SHA: "head123"}, Mergeable: &mergeable,
+		AllowedMergeMethods: []githubapi.MergeMethod{githubapi.MergeCommit, githubapi.MergeSquash},
+	}
+	updated, cmd := m.Update(key("m"))
+	m = updated.(model)
+	if cmd != nil || m.mergeDialog != chooseMergeMethod {
+		t.Fatalf("m did not open merge method chooser: %+v", m)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if m.mergeDialog != confirmMerge || m.mergeMethod != githubapi.MergeSquash {
+		t.Fatalf("method selection did not require confirmation: %+v", m)
+	}
+	if !strings.Contains(m.View(), "Confirm merge") || !strings.Contains(m.View(), "Squash and merge") {
+		t.Errorf("confirmation view does not describe operation: %s", m.View())
+	}
+	updated, cmd = m.Update(key("n"))
+	m = updated.(model)
+	if cmd != nil || m.mergeDialog != noMergeDialog || m.mergeInProgress || len(runner.calls) != 0 {
+		t.Fatalf("cancelled merge sent a request: state=%+v calls=%#v", m, runner.calls)
+	}
+	updated, _ = m.Update(key("m"))
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd = m.Update(key("y"))
+	m = updated.(model)
+	if cmd == nil || !m.mergeInProgress || m.mergeDialog != noMergeDialog {
+		t.Fatalf("explicit confirmation did not start merge: %+v", m)
+	}
+	merged := cmd().(pullRequestMergedMsg)
+	updated, followUp := m.Update(merged)
+	m = updated.(model)
+	if followUp == nil || m.mergeInProgress || !m.loading || !m.detailLoading || !strings.Contains(m.mergeNotice, "squash") {
+		t.Fatalf("successful merge did not refresh PR/dashboard: state=%+v command=%v", m, followUp != nil)
+	}
+	foundMethod, foundSHA := false, false
+	for _, arg := range runner.calls[0] {
+		foundMethod = foundMethod || arg == "merge_method=squash"
+		foundSHA = foundSHA || arg == "sha=head123"
+	}
+	if !foundMethod || !foundSHA {
+		t.Fatalf("merge request did not use selected method and current head SHA: %#v", runner.calls)
+	}
+}
+
+func TestMergeFailureIsShownWithoutRefreshingDashboard(t *testing.T) {
+	runner := &modelTestRunner{
+		stderr: []byte("HTTP 409: Head branch was modified. Review and try the merge again."),
+		err:    errors.New("exit status 1"),
+	}
+	m := initialModel()
+	m.client = githubapi.NewClientWithRunner(runner)
+	m.loading = false
+	m.detailOpen = true
+	m.detailKey = "octo/project#42"
+	m.prDetails = githubapi.PullRequestDetails{
+		PullRequest:         githubapi.PullRequest{Number: 42, Repository: "octo/project", State: "open"},
+		Head:                githubapi.PullRequestBranch{SHA: "oldsha"},
+		AllowedMergeMethods: []githubapi.MergeMethod{githubapi.MergeCommit},
+	}
+	updated, _ := m.Update(key("m"))
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd := m.Update(key("y"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("confirmed merge returned no command")
+	}
+	result := cmd().(pullRequestMergedMsg)
+	updated, followUp := m.Update(result)
+	m = updated.(model)
+	if followUp != nil || m.mergeInProgress || m.loading || !strings.Contains(m.mergeError, "changed since it was loaded") {
+		t.Fatalf("stale-head failure state = %+v, follow-up command = %v", m, followUp != nil)
+	}
+	if !strings.Contains(m.View(), "refresh the PR") && !strings.Contains(m.View(), "changed since it was loaded") {
+		t.Errorf("stale-head guidance missing from detail screen: %s", m.View())
+	}
+}
+
+func TestPullRequestDetailsScrollAndLayout(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
+		for _, state := range []string{"normal", "choosing", "confirming", "merge-error"} {
+			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, state), func(t *testing.T) {
+				m := initialModel()
+				m.width, m.height = size.width, size.height
+				m.detailOpen = true
+				m.detailKey = "octo/project#42"
+				m.prDetails = githubapi.PullRequestDetails{
+					PullRequest:         githubapi.PullRequest{Number: 42, Repository: "octo/project", Title: "A useful pull request", State: "open"},
+					Body:                strings.Repeat("Long description text with useful context.\n", 40),
+					Head:                githubapi.PullRequestBranch{Ref: "feature", SHA: "headsha"},
+					Base:                githubapi.PullRequestBranch{Ref: "main"},
+					AllowedMergeMethods: []githubapi.MergeMethod{githubapi.MergeCommit},
+				}
+				switch state {
+				case "choosing":
+					m.mergeDialog = chooseMergeMethod
+				case "confirming":
+					m.mergeDialog = confirmMerge
+					m.mergeMethod = githubapi.MergeCommit
+				case "merge-error":
+					m.mergeError = strings.Repeat("Merge failed; refresh and check branch protection. ", 4)
+				}
+				view := m.View()
+				for _, line := range strings.Split(view, "\n") {
+					if got := lipgloss.Width(line); got > size.width {
+						t.Errorf("line width %d exceeds terminal: %q", got, line)
+					}
+				}
+				if lines := strings.Count(view, "\n") + 1; lines > size.height {
+					t.Errorf("view uses %d rows, terminal has %d", lines, size.height)
+				}
+				if state == "normal" {
+					updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+					if updated.(model).detailScroll == 0 && updated.(model).maxDetailScroll() > 0 {
+						t.Error("End did not scroll the detail description")
+					}
+				}
+			})
+		}
 	}
 }
 

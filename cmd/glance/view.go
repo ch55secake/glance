@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"glance/internal/githubapi"
 
@@ -38,6 +39,12 @@ func (m model) View() string {
 	switch {
 	case m.showHelp:
 		lines = append(lines, m.helpView(inner)...)
+	case m.detailOpen:
+		content := m.pullRequestDetailsView(inner)
+		visible := max(1, m.height-len(lines)-2)
+		start := min(max(0, m.detailScroll), max(0, len(content)-visible))
+		end := min(len(content), start+visible)
+		lines = append(lines, content[start:end]...)
 	case m.activeSection == 1:
 		lines = append(lines, m.pullRequestView(inner)...)
 	case m.activeSection == 0:
@@ -301,11 +308,23 @@ func (m model) hasErrors() bool {
 func (m model) helpView(width int) []string {
 	shortcuts := []string{
 		"←/→ or h/l  Switch sections", "↑/↓ or j/k  Select list item", "Home / End   First / last item",
+		"enter        Open PR details", "m            Select/confirm merge",
 		"/            Search PRs", "a / m / d    All / mine / drafts",
 		"esc          Clear search & filter", "r            Refresh", "?            Close help", "q            Quit",
 	}
+	if m.detailOpen {
+		shortcuts = []string{
+			"↑/↓ or j/k  Scroll PR details and diff", "Home / End   First / last line",
+			"m            Merge pull request", "r            Refresh details and diff",
+			"esc          Return to PR inbox", "?            Close help", "q            Quit",
+		}
+	}
 	if m.height < 19 {
-		shortcuts = []string{"←/→ sections   ↑/↓ select", "/ search   a/m/d filters", "r refresh   ? close   q quit"}
+		if m.detailOpen {
+			shortcuts = []string{"↑/↓ or j/k scroll details and diff", "m merge   r refresh", "esc back   ? close   q quit"}
+		} else {
+			shortcuts = []string{"←/→ sections   ↑/↓ select", "enter details   m merge", "/ search   a/m/d filters", "r refresh   ? close   q quit"}
+		}
 	}
 	lines := []string{"  " + accentStyle.Render("KEYBOARD SHORTCUTS"), ""}
 	for _, shortcut := range shortcuts {
@@ -354,6 +373,227 @@ func (m model) pullRequestView(width int) []string {
 	}
 	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d of %d  ·  j/k move  ·  / search", start+1, end, len(items)), width)))
 	return lines
+}
+
+func (m model) pullRequestDetailsView(width int) []string {
+	if m.prDetails.Number == 0 {
+		var lines []string
+		if m.detailLoading {
+			lines = m.message(width, "Loading pull request", "Fetching pull request details, reviews, and checks...", "This can take a moment.")
+		} else if m.detailError != "" {
+			lines = m.message(width, "Could not load pull request", m.detailError, "Press r to try again, or esc to return.")
+		} else {
+			lines = m.message(width, "Pull request unavailable", "No pull request details are loaded.", "Press r to try again, or esc to return.")
+		}
+		return append(lines, m.pullRequestDiffLines(width)...)
+	}
+	details := m.prDetails
+	state := strings.ToUpper(details.State)
+	if details.Merged {
+		state = "MERGED"
+	} else if details.Draft {
+		state += " · DRAFT"
+	}
+	lines := []string{
+		"  " + accentStyle.Render(clipLine(fmt.Sprintf("%s#%d  ·  %s", safeText(details.Repository), details.Number, safeText(details.Title)), width)),
+		"  " + goodStyle.Render(clipLine(state, width)),
+	}
+	if m.detailLoading {
+		lines = append(lines, "  "+warnStyle.Render("Refreshing pull request details…"))
+	}
+	if m.detailError != "" {
+		lines = append(lines, "  "+errorStyle.Render(clipLine("Refresh failed: "+m.detailError, width)))
+	}
+	if m.mergeNotice != "" {
+		lines = append(lines, "  "+goodStyle.Render(clipLine(m.mergeNotice, width)))
+	}
+	if m.mergeError != "" {
+		lines = append(lines, "  "+errorStyle.Render(clipLine(m.mergeError, width)))
+	}
+	if m.prDetails.MergeMethodsError != "" {
+		lines = append(lines, "  "+warnStyle.Render(clipLine("Merge methods unavailable: "+safeText(m.prDetails.MergeMethodsError), width)))
+	}
+	if m.mergeDialog == chooseMergeMethod {
+		lines = append(lines, "", "  "+accentStyle.Render("Choose merge method"))
+		for i, method := range details.AllowedMergeMethods {
+			label := mergeMethodLabel(method)
+			if i == m.mergeMethodIndex {
+				lines = append(lines, "  "+activeStyle.Render(" "+label+" "))
+			} else {
+				lines = append(lines, "  "+mutedStyle.Render(label))
+			}
+		}
+		lines = append(lines, "  "+mutedStyle.Render(clipLine("←/→ choose · enter continue · esc cancel", width)))
+	}
+	if m.mergeDialog == confirmMerge {
+		lines = append(lines, "", "  "+warnStyle.Render("Confirm merge"),
+			"  "+clipLine(fmt.Sprintf("Merge %s#%d using %s?", details.Repository, details.Number, mergeMethodLabel(m.mergeMethod)), width),
+			"  "+errorStyle.Render(clipLine("This changes the repository. Press y to confirm or esc to cancel.", width)))
+	}
+	if m.mergeInProgress {
+		lines = append(lines, "  "+warnStyle.Render("Merging pull request…"))
+	}
+	lines = append(lines,
+		"  "+mutedStyle.Render(clipLine("Author: @"+safeText(details.User.Login), width)),
+		"  "+mutedStyle.Render(clipLine(fmt.Sprintf("Branches: %s  →  %s", safeText(details.Head.Ref), safeText(details.Base.Ref)), width)),
+		"  "+mutedStyle.Render(clipLine("Updated "+relativeTime(details.UpdatedAt), width)),
+	)
+	if details.Mergeable == nil {
+		lines = append(lines, "  "+warnStyle.Render(clipLine("Mergeability: checking ("+safeText(details.MergeableState)+")", width)))
+	} else if *details.Mergeable {
+		lines = append(lines, "  "+goodStyle.Render(clipLine("Mergeability: mergeable ("+safeText(details.MergeableState)+")", width)))
+	} else {
+		lines = append(lines, "  "+warnStyle.Render(clipLine("Mergeability: blocked ("+safeText(details.MergeableState)+")", width)))
+	}
+	lines = append(lines, "  "+accentStyle.Render("Requested reviewers"))
+	if len(details.RequestedReviewers) == 0 {
+		lines = append(lines, "  "+mutedStyle.Render("None"))
+	} else {
+		reviewers := make([]string, 0, len(details.RequestedReviewers))
+		for _, reviewer := range details.RequestedReviewers {
+			reviewers = append(reviewers, "@"+safeText(reviewer.Login))
+		}
+		lines = append(lines, "  "+mutedStyle.Render(clipLine(strings.Join(reviewers, ", "), width)))
+	}
+	lines = append(lines, "  "+accentStyle.Render("Reviews"))
+	if details.ReviewsError != "" {
+		lines = append(lines, "  "+errorStyle.Render(clipLine("Unavailable: "+safeText(details.ReviewsError), width)))
+	} else if len(details.Reviews) == 0 {
+		lines = append(lines, "  "+mutedStyle.Render("No reviews submitted"))
+	} else {
+		seen := make(map[string]bool)
+		count := 0
+		for _, review := range details.Reviews {
+			login := safeText(review.User.Login)
+			if seen[strings.ToLower(login)] {
+				continue
+			}
+			seen[strings.ToLower(login)] = true
+			lines = append(lines, "  "+mutedStyle.Render(clipLine("@"+login+": "+strings.ToUpper(safeText(review.State)), width)))
+			count++
+			if count == 5 {
+				break
+			}
+		}
+	}
+	lines = append(lines, "  "+accentStyle.Render(fmt.Sprintf("Checks (%d)", len(details.CheckRuns))))
+	if details.ChecksError != "" {
+		lines = append(lines, "  "+errorStyle.Render(clipLine("Unavailable: "+safeText(details.ChecksError), width)))
+	} else if len(details.CheckRuns) == 0 {
+		lines = append(lines, "  "+mutedStyle.Render("No checks reported"))
+	} else {
+		for i, check := range details.CheckRuns {
+			if i == 8 {
+				lines = append(lines, "  "+mutedStyle.Render(fmt.Sprintf("… and %d more", len(details.CheckRuns)-i)))
+				break
+			}
+			status := check.Conclusion
+			if status == "" {
+				status = check.Status
+			}
+			style := warnStyle
+			switch status {
+			case "success", "neutral", "skipped":
+				style = goodStyle
+			case "failure", "timed_out", "action_required", "cancelled":
+				style = errorStyle
+			}
+			lines = append(lines, "  "+style.Render(clipLine(safeText(check.Name)+": "+strings.ToUpper(safeText(status)), width)))
+		}
+	}
+	lines = append(lines, "  "+accentStyle.Render("Description"))
+	description := strings.TrimSpace(details.Body)
+	if description == "" {
+		lines = append(lines, "  "+mutedStyle.Render("(No description.)"))
+	} else {
+		wrapped := lipgloss.NewStyle().Width(max(1, width-2)).Render(safeMultiline(description))
+		for _, line := range strings.Split(wrapped, "\n") {
+			lines = append(lines, "  "+line)
+		}
+	}
+	lines = append(lines, m.pullRequestDiffLines(width)...)
+	return lines
+}
+
+func (m model) pullRequestDiffLines(width int) []string {
+	lines := []string{"", "  " + accentStyle.Render("CHANGED FILES")}
+	if m.diffLoading && !m.diffLoaded {
+		return append(lines, "  "+warnStyle.Render("Loading changed files and patches from GitHub…"))
+	}
+	if m.diffError != "" {
+		lines = append(lines, "  "+errorStyle.Render(clipLine("Could not load diff: "+m.diffError, width)))
+		if !m.diffLoaded || len(m.diffFiles) == 0 {
+			return lines
+		}
+	}
+	if !m.diffLoaded {
+		return append(lines, "  "+mutedStyle.Render("Changed files have not loaded yet."))
+	}
+	if len(m.diffFiles) == 0 {
+		return append(lines, "  "+mutedStyle.Render("No changed files."))
+	}
+	lines = append(lines, "  "+mutedStyle.Render(fmt.Sprintf("%d files changed", len(m.diffFiles))))
+	for i, file := range m.diffFiles {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		path := safeText(file.Filename)
+		if file.PreviousFilename != "" && file.PreviousFilename != file.Filename {
+			path = safeText(file.PreviousFilename) + " → " + path
+		}
+		lines = append(lines,
+			"  "+textStyle.Bold(true).Render(clipLine(path, width)),
+			"  "+mutedStyle.Render(clipLine(fmt.Sprintf("File %d/%d  ·  %s  ·  +%d −%d", i+1, len(m.diffFiles), safeText(file.Status), file.Additions, file.Deletions), width)),
+			"  "+mutedStyle.Render(strings.Repeat("─", width)),
+		)
+		if file.Patch == "" {
+			lines = append(lines, "  "+mutedStyle.Render(clipLine("GitHub did not provide a patch for this file (it may be binary or too large).", width)))
+			continue
+		}
+		for _, patchLine := range strings.Split(strings.TrimSuffix(file.Patch, "\n"), "\n") {
+			clean := safeMultiline(patchLine)
+			style := textStyle
+			switch {
+			case strings.HasPrefix(clean, "+++") || strings.HasPrefix(clean, "---"):
+				style = mutedStyle
+			case strings.HasPrefix(clean, "+"):
+				style = goodStyle
+			case strings.HasPrefix(clean, "-"):
+				style = errorStyle
+			case strings.HasPrefix(clean, "@@"):
+				style = accentStyle
+			}
+			lines = append(lines, "  "+style.Render(clipLine(clean, width)))
+		}
+	}
+	return lines
+}
+
+func mergeMethodLabel(method githubapi.MergeMethod) string {
+	switch method {
+	case githubapi.MergeCommit:
+		return "Merge commit"
+	case githubapi.MergeSquash:
+		return "Squash and merge"
+	case githubapi.MergeRebase:
+		return "Rebase and merge"
+	default:
+		return string(method)
+	}
+}
+
+func safeMultiline(text string) string {
+	var safe strings.Builder
+	for _, char := range text {
+		if char == '\n' {
+			safe.WriteRune(char)
+		} else if char == '\r' || char == '\t' {
+			safe.WriteRune(' ')
+		} else if !unicode.IsControl(char) {
+			safe.WriteRune(char)
+		}
+	}
+	return safe.String()
 }
 
 func (m model) filterBar(width int) string {
@@ -440,13 +680,26 @@ func (m model) message(width int, title, detail, hint string) []string {
 
 func (m model) footer(width int) string {
 	help := "←/→ sections   r refresh   ? help   q quit"
-	switch m.activeSection {
-	case 1:
-		help = "↑/↓ select   a/m/d filter   / search   ? help   q quit"
-	case 2:
-		help = "↑/↓ select   r refresh   ? help   q quit"
-	case 3:
-		help = "↑/↓ select   r refresh   ? help   q quit"
+	if m.detailOpen {
+		switch {
+		case m.mergeInProgress:
+			help = "Merge in progress…   q quit"
+		case m.mergeDialog == chooseMergeMethod:
+			help = "←/→ choose method   enter continue   esc cancel"
+		case m.mergeDialog == confirmMerge:
+			help = "y confirm merge   esc cancel"
+		default:
+			help = "esc back   ↑/↓/j/k scroll   m merge   r refresh"
+		}
+	} else {
+		switch m.activeSection {
+		case 1:
+			help = "enter details   ↑/↓ select   a/m/d filter   / search"
+		case 2:
+			help = "↑/↓ select   r refresh   ? help   q quit"
+		case 3:
+			help = "↑/↓ select   r refresh   ? help   q quit"
+		}
 	}
 	if m.searching {
 		help = "Type to search   enter/esc finish   backspace delete"

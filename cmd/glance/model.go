@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,25 @@ type model struct {
 	searching            bool
 	showHelp             bool
 	requestID            int
+	detailOpen           bool
+	detailLoading        bool
+	detailRequestID      int
+	detailKey            string
+	detailError          string
+	detailScroll         int
+	prDetails            githubapi.PullRequestDetails
+	diffLoading          bool
+	diffLoaded           bool
+	diffRequestID        int
+	diffError            string
+	diffFiles            []githubapi.PullRequestFile
+	mergeDialog          mergeDialogState
+	mergeMethodIndex     int
+	mergeMethod          githubapi.MergeMethod
+	mergeInProgress      bool
+	mergeRequestID       int
+	mergeError           string
+	mergeNotice          string
 	client               *githubapi.Client
 }
 
@@ -51,6 +71,35 @@ type dashboardLoadedMsg struct {
 	issueErr        error
 	notificationErr error
 }
+
+type pullRequestDetailsLoadedMsg struct {
+	requestID int
+	key       string
+	details   githubapi.PullRequestDetails
+	err       error
+}
+
+type pullRequestFilesLoadedMsg struct {
+	requestID int
+	key       string
+	files     []githubapi.PullRequestFile
+	err       error
+}
+
+type pullRequestMergedMsg struct {
+	requestID int
+	key       string
+	result    githubapi.MergeResult
+	err       error
+}
+
+type mergeDialogState int
+
+const (
+	noMergeDialog mergeDialogState = iota
+	chooseMergeMethod
+	confirmMerge
+)
 
 type prFilter int
 
@@ -97,6 +146,198 @@ func (m model) loadDashboard() tea.Cmd {
 	}
 }
 
+func (m *model) openSelectedPullRequest() tea.Cmd {
+	items := m.filteredPRs()
+	if m.selectedPR < 0 || m.selectedPR >= len(items) {
+		return nil
+	}
+	pr := items[m.selectedPR]
+	m.detailKey = fmt.Sprintf("%s#%d", pr.Repository, pr.Number)
+	m.detailOpen = true
+	m.detailLoading = true
+	m.detailError = ""
+	m.prDetails = githubapi.PullRequestDetails{}
+	m.mergeError = ""
+	m.mergeNotice = ""
+	m.mergeDialog = noMergeDialog
+	m.mergeInProgress = false
+	m.detailScroll = 0
+	m.diffLoading = true
+	m.diffLoaded = false
+	m.diffError = ""
+	m.diffFiles = nil
+	m.detailRequestID++
+	return tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
+}
+
+func (m model) loadPullRequestDetails() tea.Cmd {
+	requestID, key, client := m.detailRequestID, m.detailKey, m.client
+	owner, repository, number, err := parsePullRequestKey(key)
+	return func() tea.Msg {
+		if err != nil {
+			return pullRequestDetailsLoadedMsg{requestID: requestID, key: key, err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dashboardLoadTimeout)
+		defer cancel()
+		details, err := client.GetPullRequestDetails(ctx, owner, repository, number)
+		return pullRequestDetailsLoadedMsg{requestID: requestID, key: key, details: details, err: err}
+	}
+}
+
+func (m *model) loadPullRequestFiles() tea.Cmd {
+	m.diffRequestID++
+	requestID, key, client := m.diffRequestID, m.detailKey, m.client
+	owner, repository, number, err := parsePullRequestKey(key)
+	return func() tea.Msg {
+		if err != nil {
+			return pullRequestFilesLoadedMsg{requestID: requestID, key: key, err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dashboardLoadTimeout)
+		defer cancel()
+		files, err := client.ListPullRequestFiles(ctx, owner, repository, number)
+		return pullRequestFilesLoadedMsg{requestID: requestID, key: key, files: files, err: err}
+	}
+}
+
+func (m *model) mergePullRequest(method githubapi.MergeMethod) tea.Cmd {
+	m.mergeRequestID++
+	requestID, key, sha, client := m.mergeRequestID, m.detailKey, m.prDetails.Head.SHA, m.client
+	owner, repository, number, err := parsePullRequestKey(key)
+	m.mergeInProgress = true
+	m.mergeDialog = noMergeDialog
+	m.mergeError = ""
+	m.mergeNotice = ""
+	return func() tea.Msg {
+		if err != nil {
+			return pullRequestMergedMsg{requestID: requestID, key: key, err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dashboardLoadTimeout)
+		defer cancel()
+		result, err := client.MergePullRequest(ctx, owner, repository, number, method, sha)
+		return pullRequestMergedMsg{requestID: requestID, key: key, result: result, err: err}
+	}
+}
+
+func parsePullRequestKey(key string) (owner, repository string, number int, err error) {
+	repo, numberText, ok := strings.Cut(key, "#")
+	if !ok {
+		return "", "", 0, fmt.Errorf("invalid pull request reference %q", key)
+	}
+	owner, repository, ok = strings.Cut(repo, "/")
+	if !ok || owner == "" || repository == "" {
+		return "", "", 0, fmt.Errorf("invalid pull request repository %q", repo)
+	}
+	number, err = strconv.Atoi(numberText)
+	if err != nil || number < 1 {
+		return "", "", 0, fmt.Errorf("invalid pull request number %q", numberText)
+	}
+	return owner, repository, number, nil
+}
+
+func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if key == "ctrl+c" || key == "q" {
+		return m, tea.Quit
+	}
+	if m.mergeInProgress {
+		return m, nil
+	}
+	if m.mergeDialog == chooseMergeMethod {
+		methods := m.prDetails.AllowedMergeMethods
+		if len(methods) == 0 {
+			m.mergeDialog = noMergeDialog
+			m.mergeError = "No merge methods are enabled for this repository."
+			return m, nil
+		}
+		switch key {
+		case "esc":
+			m.mergeDialog = noMergeDialog
+		case "left", "h":
+			m.mergeMethodIndex = (m.mergeMethodIndex + len(methods) - 1) % len(methods)
+		case "right", "l":
+			m.mergeMethodIndex = (m.mergeMethodIndex + 1) % len(methods)
+		case "enter":
+			if len(methods) > 0 {
+				m.mergeMethod = methods[m.mergeMethodIndex]
+				m.mergeDialog = confirmMerge
+			}
+		case "1", "2", "3":
+			index, _ := strconv.Atoi(key)
+			index--
+			if index >= 0 && index < len(methods) {
+				m.mergeMethodIndex = index
+			}
+		}
+		return m, nil
+	}
+	if m.mergeDialog == confirmMerge {
+		switch key {
+		case "esc", "n", "N":
+			m.mergeDialog = noMergeDialog
+		case "y", "Y":
+			return m, m.mergePullRequest(m.mergeMethod)
+		}
+		return m, nil
+	}
+	switch key {
+	case "esc":
+		m.detailOpen = false
+		m.detailScroll = 0
+	case "up", "k":
+		m.detailScroll = max(0, m.detailScroll-1)
+	case "down", "j":
+		m.detailScroll = min(m.maxDetailScroll(), m.detailScroll+1)
+	case "home":
+		m.detailScroll = 0
+	case "end":
+		m.detailScroll = m.maxDetailScroll()
+	case "r", "R":
+		if !m.detailLoading && !m.diffLoading {
+			m.detailLoading = true
+			m.detailError = ""
+			m.diffLoading = true
+			m.diffLoaded = false
+			m.diffError = ""
+			m.diffFiles = nil
+			m.detailScroll = 0
+			m.detailRequestID++
+			return m, tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
+		}
+	case "m", "M":
+		m.detailScroll = 0
+		switch {
+		case m.detailLoading:
+			m.mergeError = "Wait for the pull request details to finish loading before merging."
+		case m.detailError != "":
+			m.mergeError = "Refresh the pull request details before merging."
+		case m.prDetails.State != "open" || m.prDetails.Merged:
+			m.mergeError = "Only open, unmerged pull requests can be merged."
+		case m.prDetails.Draft:
+			m.mergeError = "Mark this pull request ready for review before merging."
+		case m.prDetails.Head.SHA == "":
+			m.mergeError = "GitHub did not provide a head SHA; refresh before merging."
+		case m.prDetails.Mergeable != nil && !*m.prDetails.Mergeable:
+			m.mergeError = "GitHub reports this pull request is not mergeable; check for conflicts."
+		case len(m.prDetails.AllowedMergeMethods) == 0:
+			if m.prDetails.MergeMethodsError != "" {
+				m.mergeError = "Could not load repository merge settings: " + safeText(m.prDetails.MergeMethodsError)
+			} else {
+				m.mergeError = "This repository has no enabled merge methods."
+			}
+		default:
+			m.mergeError = ""
+			m.mergeMethodIndex = 0
+			m.mergeDialog = chooseMergeMethod
+		}
+	}
+	return m, nil
+}
+
+func (m model) maxDetailScroll() int {
+	visible := max(1, m.height-6)
+	return max(0, len(m.pullRequestDetailsView(max(1, m.width-4)))-visible)
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -132,6 +373,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.restoreSelection(selectedPR)
 		m.restoreIssueSelection(selectedIssue)
 		m.restoreNotificationSelection(selectedNotification)
+	case pullRequestDetailsLoadedMsg:
+		if msg.requestID != m.detailRequestID || msg.key != m.detailKey {
+			break
+		}
+		m.detailLoading = false
+		if msg.err != nil {
+			m.detailError = safeText(msg.err.Error())
+			break
+		}
+		m.prDetails = msg.details
+		m.detailError = ""
+		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
+	case pullRequestFilesLoadedMsg:
+		if msg.requestID != m.diffRequestID || msg.key != m.detailKey {
+			break
+		}
+		m.diffLoading = false
+		if msg.err != nil {
+			m.diffError = safeText(msg.err.Error())
+			m.diffLoaded = false
+			break
+		}
+		m.diffFiles = msg.files
+		m.diffLoaded = true
+		m.diffError = ""
+		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
+	case pullRequestMergedMsg:
+		if msg.requestID != m.mergeRequestID || msg.key != m.detailKey {
+			break
+		}
+		m.mergeInProgress = false
+		if msg.err != nil {
+			m.mergeError = safeText(msg.err.Error())
+			break
+		}
+		m.mergeNotice = "Merged successfully using " + strings.ToLower(string(m.mergeMethod)) + "."
+		m.loading = true
+		m.requestID++
+		m.detailLoading = true
+		m.detailRequestID++
+		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
 	case tea.KeyMsg:
 		if m.searching {
 			switch msg.String() {
@@ -159,6 +441,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.detailOpen {
+			return m.updatePullRequestDetailKey(msg)
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -174,6 +459,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setSelection(0)
 		case "end":
 			m.setSelection(m.visibleItemTotal() - 1)
+		case "enter":
+			if m.activeSection == 1 {
+				return m, m.openSelectedPullRequest()
+			}
 		case "?":
 			m.showHelp = true
 		case "/":
