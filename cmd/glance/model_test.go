@@ -288,6 +288,81 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 	}
 }
 
+func TestDiffLoadsOnDemandAndNavigatesChangedFiles(t *testing.T) {
+	runner := &modelTestRunner{responses: map[string][]byte{
+		"repos/octo/project/pulls/42/files": []byte(`[[{"filename":"README.md","status":"modified","additions":1,"deletions":1,"patch":"@@ -1 +1 @@\n-old text\n+new text"},{"filename":"src/app.go","status":"added","additions":2,"patch":"@@ -0,0 +1,2 @@\n+package app\n+func Run() {}"}]]`),
+	}}
+	m := initialModel()
+	m.client = githubapi.NewClientWithRunner(runner)
+	m.detailOpen = true
+	m.detailKey = "octo/project#42"
+	m.prDetails = githubapi.PullRequestDetails{PullRequest: githubapi.PullRequest{Number: 42, Repository: "octo/project"}}
+	updated, cmd := m.Update(key("d"))
+	m = updated.(model)
+	if cmd == nil || !m.diffOpen || !m.diffLoading || len(runner.calls) != 0 {
+		t.Fatalf("diff did not load on demand: state=%+v calls=%#v command=%v", m, runner.calls, cmd != nil)
+	}
+	loaded := cmd().(pullRequestFilesLoadedMsg)
+	updated, _ = m.Update(loaded)
+	m = updated.(model)
+	if !m.diffLoaded || m.diffLoading || len(m.diffFiles) != 2 {
+		t.Fatalf("changed files were not loaded: %+v", m)
+	}
+	view := m.View()
+	for _, text := range []string{"DIFF  octo/project#42", "README.md", "File 1/2", "-old text", "+new text"} {
+		if !strings.Contains(view, text) {
+			t.Errorf("diff view missing %q: %s", text, view)
+		}
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(model)
+	if m.selectedDiffFile != 1 || !strings.Contains(m.View(), "src/app.go") || !strings.Contains(m.View(), "package app") {
+		t.Fatalf("next-file navigation failed: selected=%d view=%s", m.selectedDiffFile, m.View())
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(model)
+	if m.diffOpen || !m.detailOpen || !m.diffLoaded {
+		t.Fatalf("returning from diff lost the PR details or loaded diff: %+v", m)
+	}
+}
+
+func TestPullRequestDiffLayoutsAndUnavailablePatches(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
+		for _, state := range []string{"normal", "binary", "error"} {
+			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, state), func(t *testing.T) {
+				m := initialModel()
+				m.width, m.height = size.width, size.height
+				m.detailOpen = true
+				m.diffOpen = true
+				m.diffLoaded = true
+				m.detailKey = "octo/project#42"
+				m.diffFiles = []githubapi.PullRequestFile{{
+					Filename: "src/a-very-long-file-name.go", Status: "modified", Additions: 2, Deletions: 1,
+					Patch: "@@ -1,3 +1,4 @@\n package main\n-old(" + strings.Repeat("x", 120) + ")\n+new(" + strings.Repeat("y", 120) + ")",
+				}}
+				if state == "binary" {
+					m.diffFiles[0].Patch = ""
+				}
+				if state == "error" {
+					m.diffError = strings.Repeat("GitHub denied access; check repository access and permissions. ", 3)
+				}
+				view := m.View()
+				for _, line := range strings.Split(view, "\n") {
+					if got := lipgloss.Width(line); got > size.width {
+						t.Errorf("line width %d exceeds terminal: %q", got, line)
+					}
+				}
+				if lines := strings.Count(view, "\n") + 1; lines > size.height {
+					t.Errorf("view uses %d rows, terminal has %d", lines, size.height)
+				}
+				if state == "binary" && !strings.Contains(view, "GitHub did not provide") {
+					t.Errorf("missing explanation for unavailable patch: %s", view)
+				}
+			})
+		}
+	}
+}
+
 func TestMergeFlowRequiresMethodChoiceAndConfirmation(t *testing.T) {
 	runner := &modelTestRunner{responses: map[string][]byte{
 		"repos/octo/project/pulls/42/merge": []byte(`{"sha":"merged123","merged":true,"message":"Pull Request successfully merged"}`),

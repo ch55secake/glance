@@ -56,6 +56,37 @@ func TestListPullRequestsRejectsInvalidPathSegments(t *testing.T) {
 	}
 }
 
+func TestListPullRequestFilesUsesPagination(t *testing.T) {
+	runner := &stubRunner{stdout: []byte(`[[{"filename":"README.md","status":"modified","additions":2,"deletions":1,"changes":3,"patch":"@@ -1 +1 @@\n-old\n+new"}],[{"filename":"cmd/app.go","previous_filename":"cmd/main.go","status":"renamed","patch":"@@ -1 +1 @@\n-old\n+new"}]]`)}
+	files, err := NewClientWithRunner(runner).ListPullRequestFiles(context.Background(), "octo", "project", 42)
+	if err != nil {
+		t.Fatalf("ListPullRequestFiles() error = %v", err)
+	}
+	if len(files) != 2 || files[0].Filename != "README.md" || !strings.Contains(files[0].Patch, "+new") || files[1].PreviousFilename != "cmd/main.go" {
+		t.Fatalf("ListPullRequestFiles() = %+v", files)
+	}
+	want := [][]string{{
+		"api", "--paginate", "--slurp", "-X", "GET", "-F", "per_page=100",
+		"repos/octo/project/pulls/42/files",
+	}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Errorf("gh calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestListPullRequestFilesRejectsInvalidArguments(t *testing.T) {
+	runner := &stubRunner{}
+	if _, err := NewClientWithRunner(runner).ListPullRequestFiles(context.Background(), "octo/project", "repo", 42); err == nil {
+		t.Fatal("ListPullRequestFiles() error = nil, want validation error")
+	}
+	if _, err := NewClientWithRunner(runner).ListPullRequestFiles(context.Background(), "octo", "repo", 0); err == nil {
+		t.Fatal("ListPullRequestFiles() error = nil for PR number 0")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("invalid file request invoked gh: %#v", runner.calls)
+	}
+}
+
 func TestGetPullRequestDetailsLoadsReviewStatusChecksAndMergeMethods(t *testing.T) {
 	runner := &routingRunner{responses: map[string][]byte{
 		"repos/octo/project/pulls/42":                  []byte(`{"number":42,"title":"Useful change","state":"open","body":"Description","user":{"login":"octocat"},"head":{"ref":"feature","sha":"abc123"},"base":{"ref":"main","sha":"def456"},"requested_reviewers":[{"login":"hubot"}],"mergeable":true,"mergeable_state":"clean"}`),

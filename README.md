@@ -33,9 +33,11 @@ you own, collaborate on, or can access through an organization. Navigate with
 up/down or `j`/`k`, search with `/`, and filter with `a` (all), `m` (authored by
 you), or `d` (drafts). Press `esc` to clear the active search and filter, or `r`
 to refresh. Press `enter` on a PR to open its details; use up/down or `j`/`k` to
-scroll and `esc` to return to the same inbox position. Press `m` to select an
-enabled merge method, then confirm with `y`. glance sends the merge through the
-GitHub API using the loaded head SHA and refreshes the dashboard afterwards.
+scroll and `esc` to return to the same inbox position. Press `d` to load and
+review the changed files and patches; use left/right to switch files and
+up/down to scroll the diff. Press `m` to select an enabled merge method, then
+confirm with `y`. glance sends the merge through the GitHub API using the loaded
+head SHA and refreshes the dashboard afterwards.
 The Issues section lists open issues across accessible repositories with labels
 and comment counts. Notifications shows read and unread threads and their
 reasons; use up/down or `j`/`k` to navigate either list. Overview shows counts

@@ -97,6 +97,18 @@ type PullRequestDetails struct {
 	MergeMethodsError   string              `json:"-"`
 }
 
+// PullRequestFile describes a file changed by a pull request, including the
+// unified patch when GitHub makes one available.
+type PullRequestFile struct {
+	Filename         string `json:"filename"`
+	PreviousFilename string `json:"previous_filename"`
+	Status           string `json:"status"`
+	Additions        int    `json:"additions"`
+	Deletions        int    `json:"deletions"`
+	Changes          int    `json:"changes"`
+	Patch            string `json:"patch"`
+}
+
 // MergeMethod is a supported GitHub pull request merge method.
 type MergeMethod string
 
@@ -433,6 +445,19 @@ func (c *Client) ListPullRequests(ctx context.Context, owner, repository string)
 		return nil, err
 	}
 	return decodePaginated[PullRequest](stdout, "pull requests")
+}
+
+// ListPullRequestFiles returns the changed files and patches for a pull request.
+func (c *Client) ListPullRequestFiles(ctx context.Context, owner, repository string, number int) ([]PullRequestFile, error) {
+	if !validPathSegment(owner) || !validPathSegment(repository) || number < 1 {
+		return nil, errors.New("GitHub owner, repository, and pull request number must be valid")
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/files", url.PathEscape(owner), url.PathEscape(repository), number)
+	stdout, err := c.runPaginated(ctx, endpoint, fmt.Sprintf("per_page=%d", pageSize))
+	if err != nil {
+		return nil, err
+	}
+	return decodePaginated[PullRequestFile](stdout, "pull request files")
 }
 
 // GetPullRequestDetails returns review, branch, and check information for a PR.

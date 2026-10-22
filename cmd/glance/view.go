@@ -39,6 +39,12 @@ func (m model) View() string {
 	switch {
 	case m.showHelp:
 		lines = append(lines, m.helpView(inner)...)
+	case m.diffOpen:
+		content := m.pullRequestDiffView(inner)
+		visible := max(1, m.height-len(lines)-2)
+		start := min(max(0, m.diffScroll), max(0, len(content)-visible))
+		end := min(len(content), start+visible)
+		lines = append(lines, content[start:end]...)
 	case m.detailOpen:
 		content := m.pullRequestDetailsView(inner)
 		visible := max(1, m.height-len(lines)-2)
@@ -308,12 +314,12 @@ func (m model) hasErrors() bool {
 func (m model) helpView(width int) []string {
 	shortcuts := []string{
 		"←/→ or h/l  Switch sections", "↑/↓ or j/k  Select list item", "Home / End   First / last item",
-		"enter        Open PR details", "m            Merge from PR details",
+		"enter        Open PR details", "d            View PR diff", "m  Select/confirm merge",
 		"/            Search PRs", "a / m / d    All / mine / drafts",
 		"esc          Clear search & filter", "r            Refresh", "?            Close help", "q            Quit",
 	}
 	if m.height < 19 {
-		shortcuts = []string{"←/→ sections   ↑/↓ select", "enter details   m merge", "/ search   a/m/d filters", "r refresh   ? close   q quit"}
+		shortcuts = []string{"←/→ sections   ↑/↓ select", "enter details   d diff   m merge", "/ search   a/m/d filters", "r refresh   ? close   q quit"}
 	}
 	lines := []string{"  " + accentStyle.Render("KEYBOARD SHORTCUTS"), ""}
 	for _, shortcut := range shortcuts {
@@ -384,6 +390,7 @@ func (m model) pullRequestDetailsView(width int) []string {
 	lines := []string{
 		"  " + accentStyle.Render(clipLine(fmt.Sprintf("%s#%d  ·  %s", safeText(details.Repository), details.Number, safeText(details.Title)), width)),
 		"  " + goodStyle.Render(clipLine(state, width)),
+		"  " + mutedStyle.Render(clipLine("Press d to load changed files and view the diff", width)),
 	}
 	if m.detailLoading {
 		lines = append(lines, "  "+warnStyle.Render("Refreshing pull request details…"))
@@ -501,6 +508,56 @@ func (m model) pullRequestDetailsView(width int) []string {
 	return lines
 }
 
+func (m model) pullRequestDiffView(width int) []string {
+	if m.diffLoading && !m.diffLoaded {
+		return m.message(width, "Loading diff", "Loading changed files and patches from GitHub...", "This can take a moment for large pull requests.")
+	}
+	if m.diffError != "" && !m.diffLoaded {
+		return m.message(width, "Could not load diff", m.diffError, "Press r to try again, or esc to return.")
+	}
+	if len(m.diffFiles) == 0 {
+		return m.message(width, "No changed files", "GitHub returned no files for this pull request.", "Press r to refresh, or esc to return.")
+	}
+	index := min(max(0, m.selectedDiffFile), len(m.diffFiles)-1)
+	file := m.diffFiles[index]
+	path := safeText(file.Filename)
+	if file.PreviousFilename != "" && file.PreviousFilename != file.Filename {
+		path = safeText(file.PreviousFilename) + " → " + path
+	}
+	lines := []string{
+		"  " + accentStyle.Render(clipLine("DIFF  "+safeText(m.detailKey), width)),
+		"  " + textStyle.Bold(true).Render(clipLine(path, width)),
+		"  " + mutedStyle.Render(clipLine(fmt.Sprintf("File %d/%d  ·  %s  ·  +%d −%d", index+1, len(m.diffFiles), safeText(file.Status), file.Additions, file.Deletions), width)),
+	}
+	if m.diffLoading {
+		lines = append(lines, "  "+warnStyle.Render("Refreshing changed files…"))
+	}
+	if m.diffError != "" {
+		lines = append(lines, "  "+errorStyle.Render(clipLine("Refresh failed: "+m.diffError, width)))
+	}
+	if file.Patch == "" {
+		lines = append(lines, "", "  "+mutedStyle.Render(clipLine("GitHub did not provide a patch for this file (it may be binary or too large).", width)))
+		return lines
+	}
+	lines = append(lines, "  "+mutedStyle.Render(strings.Repeat("─", width)))
+	for _, patchLine := range strings.Split(strings.TrimSuffix(file.Patch, "\n"), "\n") {
+		clean := safeMultiline(patchLine)
+		style := textStyle
+		switch {
+		case strings.HasPrefix(clean, "+++") || strings.HasPrefix(clean, "---"):
+			style = mutedStyle
+		case strings.HasPrefix(clean, "+"):
+			style = goodStyle
+		case strings.HasPrefix(clean, "-"):
+			style = errorStyle
+		case strings.HasPrefix(clean, "@@"):
+			style = accentStyle
+		}
+		lines = append(lines, "  "+style.Render(clipLine(clean, width)))
+	}
+	return lines
+}
+
 func mergeMethodLabel(method githubapi.MergeMethod) string {
 	switch method {
 	case githubapi.MergeCommit:
@@ -612,7 +669,9 @@ func (m model) message(width int, title, detail, hint string) []string {
 
 func (m model) footer(width int) string {
 	help := "←/→ sections   r refresh   ? help   q quit"
-	if m.detailOpen {
+	if m.diffOpen {
+		help = "←/→ files   ↑/↓ scroll patch   r refresh   esc back"
+	} else if m.detailOpen {
 		switch {
 		case m.mergeInProgress:
 			help = "Merge in progress…   q quit"
