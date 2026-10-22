@@ -51,7 +51,6 @@ type model struct {
 	diffRequestID        int
 	diffError            string
 	diffFiles            []githubapi.PullRequestFile
-	selectedDiffFile     int
 	diffScroll           int
 	mergeDialog          mergeDialogState
 	mergeMethodIndex     int
@@ -170,7 +169,6 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	m.diffLoaded = false
 	m.diffError = ""
 	m.diffFiles = nil
-	m.selectedDiffFile = 0
 	m.diffScroll = 0
 	m.detailRequestID++
 	return m.loadPullRequestDetails()
@@ -373,23 +371,12 @@ func (m model) updatePullRequestDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.diffScroll = 0
 	case "end":
 		m.diffScroll = m.maxDiffScroll()
-	case "left", "h":
-		if len(m.diffFiles) > 0 {
-			m.selectedDiffFile = (m.selectedDiffFile + len(m.diffFiles) - 1) % len(m.diffFiles)
-			m.diffScroll = 0
-		}
-	case "right", "l":
-		if len(m.diffFiles) > 0 {
-			m.selectedDiffFile = (m.selectedDiffFile + 1) % len(m.diffFiles)
-			m.diffScroll = 0
-		}
 	case "r", "R":
 		if !m.diffLoading {
 			m.diffLoading = true
 			m.diffLoaded = false
 			m.diffError = ""
 			m.diffFiles = nil
-			m.selectedDiffFile = 0
 			m.diffScroll = 0
 			return m, m.loadPullRequestFiles()
 		}
@@ -457,7 +444,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffFiles = msg.files
 		m.diffLoaded = true
 		m.diffError = ""
-		m.selectedDiffFile = min(max(0, m.selectedDiffFile), max(0, len(m.diffFiles)-1))
 		m.diffScroll = min(m.diffScroll, m.maxDiffScroll())
 	case pullRequestMergedMsg:
 		if msg.requestID != m.mergeRequestID || msg.key != m.detailKey {

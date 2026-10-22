@@ -518,16 +518,8 @@ func (m model) pullRequestDiffView(width int) []string {
 	if len(m.diffFiles) == 0 {
 		return m.message(width, "No changed files", "GitHub returned no files for this pull request.", "Press r to refresh, or esc to return.")
 	}
-	index := min(max(0, m.selectedDiffFile), len(m.diffFiles)-1)
-	file := m.diffFiles[index]
-	path := safeText(file.Filename)
-	if file.PreviousFilename != "" && file.PreviousFilename != file.Filename {
-		path = safeText(file.PreviousFilename) + " → " + path
-	}
 	lines := []string{
-		"  " + accentStyle.Render(clipLine("DIFF  "+safeText(m.detailKey), width)),
-		"  " + textStyle.Bold(true).Render(clipLine(path, width)),
-		"  " + mutedStyle.Render(clipLine(fmt.Sprintf("File %d/%d  ·  %s  ·  +%d −%d", index+1, len(m.diffFiles), safeText(file.Status), file.Additions, file.Deletions), width)),
+		"  " + accentStyle.Render(clipLine(fmt.Sprintf("DIFF  %s  ·  %d files", safeText(m.detailKey), len(m.diffFiles)), width)),
 	}
 	if m.diffLoading {
 		lines = append(lines, "  "+warnStyle.Render("Refreshing changed files…"))
@@ -535,25 +527,38 @@ func (m model) pullRequestDiffView(width int) []string {
 	if m.diffError != "" {
 		lines = append(lines, "  "+errorStyle.Render(clipLine("Refresh failed: "+m.diffError, width)))
 	}
-	if file.Patch == "" {
-		lines = append(lines, "", "  "+mutedStyle.Render(clipLine("GitHub did not provide a patch for this file (it may be binary or too large).", width)))
-		return lines
-	}
-	lines = append(lines, "  "+mutedStyle.Render(strings.Repeat("─", width)))
-	for _, patchLine := range strings.Split(strings.TrimSuffix(file.Patch, "\n"), "\n") {
-		clean := safeMultiline(patchLine)
-		style := textStyle
-		switch {
-		case strings.HasPrefix(clean, "+++") || strings.HasPrefix(clean, "---"):
-			style = mutedStyle
-		case strings.HasPrefix(clean, "+"):
-			style = goodStyle
-		case strings.HasPrefix(clean, "-"):
-			style = errorStyle
-		case strings.HasPrefix(clean, "@@"):
-			style = accentStyle
+	for i, file := range m.diffFiles {
+		if i > 0 {
+			lines = append(lines, "")
 		}
-		lines = append(lines, "  "+style.Render(clipLine(clean, width)))
+		path := safeText(file.Filename)
+		if file.PreviousFilename != "" && file.PreviousFilename != file.Filename {
+			path = safeText(file.PreviousFilename) + " → " + path
+		}
+		lines = append(lines,
+			"  "+textStyle.Bold(true).Render(clipLine(path, width)),
+			"  "+mutedStyle.Render(clipLine(fmt.Sprintf("File %d/%d  ·  %s  ·  +%d −%d", i+1, len(m.diffFiles), safeText(file.Status), file.Additions, file.Deletions), width)),
+			"  "+mutedStyle.Render(strings.Repeat("─", width)),
+		)
+		if file.Patch == "" {
+			lines = append(lines, "  "+mutedStyle.Render(clipLine("GitHub did not provide a patch for this file (it may be binary or too large).", width)))
+			continue
+		}
+		for _, patchLine := range strings.Split(strings.TrimSuffix(file.Patch, "\n"), "\n") {
+			clean := safeMultiline(patchLine)
+			style := textStyle
+			switch {
+			case strings.HasPrefix(clean, "+++") || strings.HasPrefix(clean, "---"):
+				style = mutedStyle
+			case strings.HasPrefix(clean, "+"):
+				style = goodStyle
+			case strings.HasPrefix(clean, "-"):
+				style = errorStyle
+			case strings.HasPrefix(clean, "@@"):
+				style = accentStyle
+			}
+			lines = append(lines, "  "+style.Render(clipLine(clean, width)))
+		}
 	}
 	return lines
 }
@@ -670,7 +675,7 @@ func (m model) message(width int, title, detail, hint string) []string {
 func (m model) footer(width int) string {
 	help := "←/→ sections   r refresh   ? help   q quit"
 	if m.diffOpen {
-		help = "←/→ files   ↑/↓ scroll patch   r refresh   esc back"
+		help = "↑/↓ scroll diff   home/end top/bottom   r refresh   esc back"
 	} else if m.detailOpen {
 		switch {
 		case m.mergeInProgress:

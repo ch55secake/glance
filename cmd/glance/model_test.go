@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -288,9 +289,17 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 	}
 }
 
-func TestDiffLoadsOnDemandAndNavigatesChangedFiles(t *testing.T) {
+func TestDiffLoadsOnDemandAndScrollsAcrossAllFiles(t *testing.T) {
+	files := []githubapi.PullRequestFile{
+		{Filename: "README.md", Status: "modified", Additions: 1, Deletions: 1, Patch: "@@ -1 +1 @@\n-old text\n+new text" + strings.Repeat("\n context line", 35)},
+		{Filename: "src/app.go", Status: "added", Additions: 2, Patch: "@@ -0,0 +1,2 @@\n+package app\n+func Run() {}"},
+	}
+	page, err := json.Marshal(files)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runner := &modelTestRunner{responses: map[string][]byte{
-		"repos/octo/project/pulls/42/files": []byte(`[[{"filename":"README.md","status":"modified","additions":1,"deletions":1,"patch":"@@ -1 +1 @@\n-old text\n+new text"},{"filename":"src/app.go","status":"added","additions":2,"patch":"@@ -0,0 +1,2 @@\n+package app\n+func Run() {}"}]]`),
+		"repos/octo/project/pulls/42/files": []byte("[" + string(page) + "]"),
 	}}
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
@@ -308,16 +317,22 @@ func TestDiffLoadsOnDemandAndNavigatesChangedFiles(t *testing.T) {
 	if !m.diffLoaded || m.diffLoading || len(m.diffFiles) != 2 {
 		t.Fatalf("changed files were not loaded: %+v", m)
 	}
+	fullDiff := strings.Join(m.pullRequestDiffView(76), "\n")
+	for _, text := range []string{"DIFF  octo/project#42", "README.md", "File 1/2", "-old text", "+new text", "src/app.go", "File 2/2", "+func Run() {}"} {
+		if !strings.Contains(fullDiff, text) {
+			t.Errorf("continuous diff missing %q: %s", text, fullDiff)
+		}
+	}
 	view := m.View()
-	for _, text := range []string{"DIFF  octo/project#42", "README.md", "File 1/2", "-old text", "+new text"} {
+	for _, text := range []string{"README.md", "-old text", "+new text"} {
 		if !strings.Contains(view, text) {
 			t.Errorf("diff view missing %q: %s", text, view)
 		}
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = updated.(model)
-	if m.selectedDiffFile != 1 || !strings.Contains(m.View(), "src/app.go") || !strings.Contains(m.View(), "package app") {
-		t.Fatalf("next-file navigation failed: selected=%d view=%s", m.selectedDiffFile, m.View())
+	if m.diffScroll == 0 || !strings.Contains(m.View(), "src/app.go") || !strings.Contains(m.View(), "package app") {
+		t.Fatalf("scrolling did not reach the next file: scroll=%d view=%s", m.diffScroll, m.View())
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(model)
