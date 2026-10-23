@@ -85,7 +85,9 @@ func (m model) View() string {
 		lines = append(lines, m.placeholderView(inner)...)
 	}
 
-	lines = append(lines, "", m.footer(inner))
+	if !m.detailOpen || m.showHelp {
+		lines = append(lines, "", m.footer(inner))
+	}
 	// Keep the view inside the terminal even on small screens or verbose API errors.
 	viewLines := strings.Split(strings.Join(lines, "\n"), "\n")
 	if m.height > 3 && len(viewLines) > m.height {
@@ -119,14 +121,19 @@ func (m model) header(width int) string {
 
 func (m model) navigation(width int) string {
 	if m.detailOpen {
-		left := "← Pull requests  /  " + safeText(m.detailKey)
+		left := "  ← Pull requests  /  " + safeText(m.detailKey)
+		style := mutedStyle
+		if !m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp {
+			left = "▎ ← Pull requests  /  " + safeText(m.detailKey)
+			style = activeStyle
+		}
 		if width >= 55 {
 			leftWidth, _ := m.reviewWidths(width)
 			total := len(m.pullRequestDetailsView(leftWidth))
 			progress := fmt.Sprintf("%d–%d / %d", min(m.detailScroll+1, total), min(m.detailScroll+m.detailViewportHeight(), total), total)
-			return "  " + alignStyled(left, progress, width, accentStyle, mutedStyle)
+			return "  " + alignStyled(left, progress, width, style, mutedStyle)
 		}
-		return "  " + accentStyle.Render(clipLine(left, width))
+		return "  " + style.Render(clipLine(left, width))
 	}
 	if width < 65 {
 		label := fmt.Sprintf("%d / %d  %s", m.activeSection+1, len(sections), sections[m.activeSection])
@@ -352,7 +359,7 @@ func (m model) helpView(width int) []string {
 	}
 	if m.detailOpen {
 		shortcuts = []string{
-			"↑/↓ or j/k  Scroll PR details and diff", "tab          Focus checks (wide terminals)", "PgUp/PgDn    Scroll a screen", "Home / End   First / last line",
+			"↑/↓ or j/k  Scroll PR details and diff", "tab          Focus sidebar (wide terminals)", "PgUp/PgDn    Scroll a screen", "Home / End   First / last line",
 			"m            Merge pull request", "r            Refresh details and diff",
 			"esc          Return to PR inbox", "?            Close help", "q            Quit",
 		}
@@ -373,12 +380,16 @@ func (m model) helpView(width int) []string {
 
 func (m model) pullRequestView(width int) []string {
 	items := m.filteredPRs()
-	heading := "PULL REQUESTS"
+	heading := "◈ PULL REQUESTS"
 	if m.loading && len(m.pullRequests) > 0 {
 		heading += "  ↻ Refreshing"
 	}
+	count := fmt.Sprintf("%d open", len(m.pullRequests))
+	if len(items) != len(m.pullRequests) {
+		count = fmt.Sprintf("%d/%d shown", len(items), len(m.pullRequests))
+	}
 	lines := []string{
-		"  " + align(accentStyle.Render(clipLine(heading, width-8)), mutedStyle.Render(fmt.Sprintf("%d open", len(m.pullRequests))), width),
+		"  " + align(accentStyle.Render(clipLine(heading, max(1, width-lipgloss.Width(count)-1))), mutedStyle.Render(count), width),
 		"  " + m.filterBar(width),
 	}
 	if m.query != "" || m.searching {
@@ -409,7 +420,7 @@ func (m model) pullRequestView(width int) []string {
 	for i := start; i < end; i++ {
 		lines = append(lines, m.prRow(items[i], width, i == m.selectedPR)...)
 	}
-	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d of %d  ·  j/k move  ·  / search", start+1, end, len(items)), width)))
+	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d/%d selected  ·  showing %d–%d  ·  ↵ review  ·  / search", m.selectedPR+1, len(items), start+1, end), width)))
 	return lines
 }
 
@@ -468,36 +479,54 @@ func (m model) renderPullRequestDetails(width int) []string {
 	if !m.hasReviewSidebar() {
 		lines = append(lines, "", "  "+accentStyle.Render(fmt.Sprintf("◉ CHECKS (%d)", len(details.CheckRuns))))
 		lines = append(lines, m.checkStatusLines(width)...)
+		lines = append(lines, "")
+		lines = append(lines, m.reviewActivityLines(width)...)
 	}
-	lines = append(lines, "", "  "+accentStyle.Render("◇ REVIEW ACTIVITY"))
-	lines = append(lines, "  "+accentStyle.Render("Requested reviewers"))
+	return lines
+}
+
+func (m model) reviewActivityLines(width int) []string {
+	details := m.prDetails
+	lines := []string{"  " + accentStyle.Render("◇ REVIEW ACTIVITY"), "  " + accentStyle.Render("Requested reviewers")}
+	if details.Number == 0 {
+		if m.detailLoading {
+			return append(lines, "  "+warnStyle.Render("Loading reviews…"))
+		}
+		if m.detailError != "" {
+			return append(lines, "  "+errorStyle.Render("Reviews unavailable"))
+		}
+	}
 	if len(details.RequestedReviewers) == 0 {
 		lines = append(lines, "  "+mutedStyle.Render("None"))
 	} else {
-		reviewers := make([]string, 0, len(details.RequestedReviewers))
 		for _, reviewer := range details.RequestedReviewers {
-			reviewers = append(reviewers, "@"+safeText(reviewer.Login))
+			for _, part := range wrapDiffLine("@"+safeText(reviewer.Login), max(1, width)) {
+				lines = append(lines, "  "+mutedStyle.Render(part))
+			}
 		}
-		lines = append(lines, "  "+mutedStyle.Render(clipLine(strings.Join(reviewers, ", "), width)))
 	}
 	lines = append(lines, "  "+accentStyle.Render("Reviews"))
 	if details.ReviewsError != "" {
-		lines = append(lines, "  "+errorStyle.Render(clipLine("Unavailable: "+safeText(details.ReviewsError), width)))
+		lines = append(lines, panelMessage("Unavailable: "+details.ReviewsError, width, errorStyle)...)
 	} else if len(details.Reviews) == 0 {
 		lines = append(lines, "  "+mutedStyle.Render("No reviews submitted"))
 	} else {
 		seen := make(map[string]bool)
-		count := 0
 		for _, review := range details.Reviews {
 			login := safeText(review.User.Login)
 			if seen[strings.ToLower(login)] {
 				continue
 			}
 			seen[strings.ToLower(login)] = true
-			lines = append(lines, "  "+mutedStyle.Render(clipLine("@"+login+": "+strings.ToUpper(safeText(review.State)), width)))
-			count++
-			if count == 5 {
-				break
+			style := mutedStyle
+			switch strings.ToUpper(review.State) {
+			case "APPROVED":
+				style = goodStyle
+			case "CHANGES_REQUESTED":
+				style = errorStyle
+			}
+			for _, part := range wrapDiffLine("@"+login+": "+strings.ToUpper(safeText(review.State)), max(1, width)) {
+				lines = append(lines, "  "+style.Render(part))
 			}
 		}
 	}
@@ -593,7 +622,7 @@ func (m model) checkStatusLines(width int) []string {
 	return lines
 }
 
-func (m model) maxChecksScroll() int {
+func (m model) maxSidebarScroll() int {
 	_, width := m.reviewWidths(max(1, m.width-4))
 	if width == 0 {
 		return 0
@@ -602,17 +631,25 @@ func (m model) maxChecksScroll() int {
 		return 0
 	}
 	available := max(1, m.detailViewportHeight()-5)
-	return max(0, len(m.checkStatusLines(width-2))-available)
+	return max(0, len(m.sidebarContent(width-2))-available)
+}
+
+func (m model) sidebarContent(width int) []string {
+	lines := m.checkStatusLines(width)
+	lines = append(lines, "")
+	return append(lines, m.reviewActivityLines(width)...)
 }
 
 func (m model) reviewSidebar(width, height int) []string {
 	inner := max(1, width-2)
-	heading := "◈ READINESS"
-	if m.checksFocus {
-		heading += "  ·  FOCUSED"
+	heading := "  ◈ READINESS"
+	headingStyle := accentStyle
+	if m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp {
+		heading = "▎ ◈ READINESS"
+		headingStyle = activeStyle
 	}
 	lines := []string{
-		"  " + accentStyle.Render(clipLine(heading, inner)),
+		"  " + headingStyle.Render(clipLine(heading, inner)),
 		m.mergeabilityStatus(inner, true),
 		"  " + mutedStyle.Render(strings.Repeat("─", inner)),
 		"  " + accentStyle.Render(clipLine(fmt.Sprintf("◉ CHECKS  (%d)", len(m.prDetails.CheckRuns)), inner)),
@@ -620,15 +657,15 @@ func (m model) reviewSidebar(width, height int) []string {
 	if len(lines) >= height {
 		return lines[:height]
 	}
-	checks := m.checkStatusLines(inner)
+	content := m.sidebarContent(inner)
 	visible := max(1, height-len(lines)-1)
-	start := min(max(0, m.checksScroll), max(0, len(checks)-visible))
-	end := min(len(checks), start+visible)
-	lines = append(lines, checks[start:end]...)
-	if len(checks) > visible {
-		lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d/%d · tab, j/k", start+1, end, len(checks)), inner)))
+	start := min(max(0, m.sidebarScroll), max(0, len(content)-visible))
+	end := min(len(content), start+visible)
+	lines = append(lines, content[start:end]...)
+	if len(content) > visible {
+		lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d / %d", start+1, end, len(content)), inner)))
 	} else {
-		lines = append(lines, "  "+mutedStyle.Render(clipLine("tab focus  ·  j/k scroll", inner)))
+		lines = append(lines, "")
 	}
 	return lines
 }
@@ -651,12 +688,12 @@ func (m model) mergeActionPanel(width int) []string {
 		for i, method := range m.prDetails.AllowedMergeMethods {
 			choice := fmt.Sprintf(" %d  %s ", i+1, mergeMethodLabel(method))
 			if i == m.mergeMethodIndex {
-				lines = append(lines, "  "+activeStyle.Render(clipLine(choice, width)))
+				lines = append(lines, "  "+activeStyle.Render(clipLine("▸"+choice, width)))
 			} else {
-				lines = append(lines, "  "+mutedStyle.Render(clipLine(choice, width)))
+				lines = append(lines, "  "+mutedStyle.Render(clipLine(" "+choice, width)))
 			}
 		}
-		return append(lines, "  "+mutedStyle.Render(clipLine("←/→ choose  ·  enter continue  ·  esc cancel", width)))
+		return append(lines, "  "+mutedStyle.Render(clipLine("↑/↓ or j/k choose  ·  enter continue  ·  esc cancel", width)))
 	case m.mergeDialog == confirmMerge:
 		lines = append(lines,
 			"  "+warnStyle.Render(clipLine("Confirm merge  ·  "+mergeMethodLabel(m.mergeMethod), width)),
@@ -665,7 +702,21 @@ func (m model) mergeActionPanel(width int) []string {
 		)
 		return lines
 	default:
-		return append(lines, "  "+accentStyle.Render(clipLine("◆ ACTIONS  ·  m merge  ·  r refresh  ·  esc back", width)))
+		actions := "◆ ACTIONS  ·  m merge  ·  r refresh  ·  esc back"
+		guidance := "↑/↓ or j/k scroll  ·  PgUp/PgDn page  ·  ? help"
+		if width < 45 {
+			actions = "◆ ACTIONS  ·  m merge"
+			guidance = "esc back  ·  r refresh  ·  ↑/↓"
+		} else if width < 70 {
+			actions = "◆ ACTIONS  ·  m merge  ·  esc back"
+			guidance = "r refresh  ·  ↑/↓ scroll  ·  PgUp/PgDn"
+		} else if m.hasReviewSidebar() {
+			guidance = "tab switch pane  ·  ↑/↓ scroll  ·  PgUp/PgDn page  ·  ? help"
+		}
+		return append(lines,
+			"  "+accentStyle.Render(clipLine(actions, width)),
+			"  "+mutedStyle.Render(clipLine(guidance, width)),
+		)
 	}
 }
 
@@ -906,26 +957,25 @@ func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []strin
 			state = openBadge.Render(state)
 		}
 	}
-	// Reserve room for the marker and keep the repository and PR number visible.
+	// Keep the number visible if a long repository name needs clipping.
+	labelWidth := max(1, width-lipgloss.Width(state)-3)
 	label := fmt.Sprintf("%s#%d", safeText(pr.Repository), pr.Number)
-	if width >= 60 {
-		age := relativeTime(pr.UpdatedAt)
-		if !selected {
-			age = mutedStyle.Render(age)
-		}
-		label = align(clipLine(label, width-25), state+" "+age, width-2)
-	} else {
-		label = clipLine(label, max(1, width-lipgloss.Width(state)-3)) + " " + state
+	if lipgloss.Width(label) > labelWidth {
+		label = fmt.Sprintf("#%d  %s", pr.Number, safeText(pr.Repository))
 	}
-	first := marker + label
-	second := marker + clipLine(safeText(pr.Title), width-2)
-	third := marker + clipLine("@"+safeText(pr.User.Login)+"  ·  updated "+relativeTime(pr.UpdatedAt), width-2)
+	first := marker + align(clipLine(label, labelWidth), state, width-2)
+	titleMarker := marker
 	if selected {
-		row := []string{first, second, third}
-		for i := range row {
-			row[i] = "  " + selectedStyle.Width(width).Render(row[i])
+		titleMarker = "▸ "
+	}
+	second := titleMarker + clipLine(safeText(pr.Title), max(1, width-2))
+	third := marker + clipLine("@"+safeText(pr.User.Login)+"  ·  updated "+relativeTime(pr.UpdatedAt), max(1, width-2))
+	if selected {
+		return []string{
+			"  " + selectedStyle.Width(width).Render(first),
+			"  " + selectedStyle.Bold(true).Width(width).Render(second),
+			"  " + selectedStyle.Foreground(lipgloss.Color("#D0D7E7")).Width(width).Render(third),
 		}
-		return row
 	}
 	return []string{"  " + first, "  " + textStyle.Bold(true).Render(second), "  " + mutedStyle.Render(third)}
 }
@@ -955,13 +1005,13 @@ func (m model) footer(width int) string {
 		case m.mergeInProgress:
 			help = "Merge in progress…   q quit"
 		case m.mergeDialog == chooseMergeMethod:
-			help = "←/→ choose method   enter continue   esc cancel"
+			help = "↑/↓ choose method   enter continue   esc cancel"
 		case m.mergeDialog == confirmMerge:
 			help = "y confirm merge   esc cancel"
 		default:
 			help = "esc back   ↑/↓ scroll   PgUp/PgDn page   m merge"
 			if m.hasReviewSidebar() {
-				help = "tab checks/diff   j/k scroll   m merge   esc back"
+				help = "tab sidebar/diff   j/k scroll   m merge   esc back"
 			}
 		}
 	} else {

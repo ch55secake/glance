@@ -198,6 +198,62 @@ func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
 	}
 }
 
+func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
+	m := initialModel()
+	m.activeSection = 1
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{
+		{Number: 42, Title: "Improve the selected PR title", Repository: "octo/project", User: githubapi.User{Login: "octocat"}},
+		{Number: 7, Title: "Draft title", Repository: "very-long-owner/very-long-repository-name", Draft: true, User: githubapi.User{Login: "hubot"}},
+	}
+	for _, width := range []int{30, 45, 80, 120} {
+		m.width = width
+		rows := m.prRow(m.pullRequests[0], width-4, true)
+		if !strings.Contains(rows[1], "▸ ") || !strings.Contains(rows[1], "Improve the selected") {
+			t.Errorf("selected title not distinguished at width %d: %q", width, rows)
+		}
+		if !strings.Contains(rows[2], "@octocat") || !strings.Contains(rows[2], "updated") {
+			t.Errorf("selected author and timestamp missing at width %d: %q", width, rows)
+		}
+		draft := m.prRow(m.pullRequests[1], width-4, false)
+		if !strings.Contains(draft[0], "#7") || !strings.Contains(draft[0], "DRAFT") {
+			t.Errorf("long repository hid the PR number or draft state at width %d: %q", width, draft)
+		}
+		for _, row := range append(rows, draft...) {
+			if got := lipgloss.Width(row); got > width {
+				t.Errorf("PR row exceeds width %d (%d): %q", width, got, row)
+			}
+		}
+	}
+	m.selectedPR = 1
+	if view := m.View(); !strings.Contains(view, "2/2 selected") {
+		t.Errorf("list footer does not show selection: %s", view)
+	}
+	m.filter = draftPRs
+	m.selectedPR = 0
+	if view := m.View(); !strings.Contains(view, "1/2 shown") || !strings.Contains(view, "1/1 selected") {
+		t.Errorf("filtered list does not show its size and selection: %s", view)
+	}
+}
+
+func TestPullRequestListSelectionVisibleWithoutColor(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.Ascii)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	m := initialModel()
+	m.activeSection = 1
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{
+		{Number: 1, Repository: "octo/repo", Title: "First PR"},
+		{Number: 2, Repository: "octo/repo", Title: "Second PR", Draft: true},
+	}
+	m.selectedPR = 1
+	view := m.View()
+	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "2/2 selected") {
+		t.Errorf("monochrome list lost the selection marker or position: %s", view)
+	}
+}
+
 func TestPullRequestEmptyAndErrorStates(t *testing.T) {
 	m := initialModel()
 	m.activeSection = 1
@@ -518,7 +574,7 @@ func TestMergeFlowRequiresMethodChoiceAndConfirmation(t *testing.T) {
 	if cmd != nil || m.mergeDialog != chooseMergeMethod {
 		t.Fatalf("m did not open merge method chooser: %+v", m)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -535,7 +591,7 @@ func TestMergeFlowRequiresMethodChoiceAndConfirmation(t *testing.T) {
 	}
 	updated, _ = m.Update(key("m"))
 	m = updated.(model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -557,6 +613,51 @@ func TestMergeFlowRequiresMethodChoiceAndConfirmation(t *testing.T) {
 	}
 	if !foundMethod || !foundSHA {
 		t.Fatalf("merge request did not use selected method and current head SHA: %#v", runner.calls)
+	}
+}
+
+func TestMergeMethodChooserUsesVerticalNavigation(t *testing.T) {
+	m := initialModel()
+	m.detailOpen = true
+	m.detailKey = "octo/project#42"
+	m.prDetails = githubapi.PullRequestDetails{
+		PullRequest:         githubapi.PullRequest{Number: 42, State: "open"},
+		Head:                githubapi.PullRequestBranch{SHA: "abc"},
+		AllowedMergeMethods: []githubapi.MergeMethod{githubapi.MergeCommit, githubapi.MergeSquash, githubapi.MergeRebase},
+	}
+	updated, _ := m.Update(key("m"))
+	m = updated.(model)
+	if m.mergeDialog != chooseMergeMethod || !strings.Contains(m.View(), "↑/↓ or j/k choose") {
+		t.Fatalf("vertical merge chooser is not visible: %s", m.View())
+	}
+	for _, input := range []tea.KeyMsg{{Type: tea.KeyRight}, key("l"), {Type: tea.KeyLeft}, key("h")} {
+		updated, _ = m.Update(input)
+		m = updated.(model)
+		if m.mergeMethodIndex != 0 {
+			t.Fatalf("horizontal input moved the vertical chooser: %d", m.mergeMethodIndex)
+		}
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(model)
+	if m.mergeMethodIndex != 2 {
+		t.Fatalf("up did not wrap to the last method: %d", m.mergeMethodIndex)
+	}
+	updated, _ = m.Update(key("j"))
+	m = updated.(model)
+	if m.mergeMethodIndex != 0 {
+		t.Fatalf("j did not wrap to the first method: %d", m.mergeMethodIndex)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	updated, _ = m.Update(key("k"))
+	m = updated.(model)
+	if m.mergeMethodIndex != 0 {
+		t.Fatalf("k did not move up: %d", m.mergeMethodIndex)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if m.mergeDialog != confirmMerge || m.mergeMethod != githubapi.MergeCommit {
+		t.Fatalf("vertical method selection failed to reach confirmation: %+v", m)
 	}
 }
 
