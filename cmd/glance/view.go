@@ -9,7 +9,10 @@ import (
 
 	"glance/internal/githubapi"
 
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 var (
@@ -48,11 +51,27 @@ func (m model) View() string {
 	case m.showHelp:
 		lines = append(lines, m.helpView(inner)...)
 	case m.detailOpen:
-		content := m.pullRequestDetailsView(inner)
+		leftWidth, rightWidth := m.reviewWidths(inner)
+		content := m.pullRequestDetailsView(leftWidth)
 		visible := m.detailViewportHeight()
 		start := min(max(0, m.detailScroll), max(0, len(content)-visible))
 		end := min(len(content), start+visible)
-		lines = append(lines, content[start:end]...)
+		if rightWidth > 0 {
+			sidebar := m.reviewSidebar(rightWidth, visible)
+			for i := 0; i < visible; i++ {
+				left := ""
+				if start+i < end {
+					left = content[start+i]
+				}
+				right := ""
+				if i < len(sidebar) {
+					right = sidebar[i]
+				}
+				lines = append(lines, lipgloss.NewStyle().Width(leftWidth+2).Render(left)+"  "+right)
+			}
+		} else {
+			lines = append(lines, content[start:end]...)
+		}
 		lines = append(lines, m.mergeActionPanel(inner)...)
 	case m.activeSection == 1:
 		lines = append(lines, m.pullRequestView(inner)...)
@@ -102,7 +121,8 @@ func (m model) navigation(width int) string {
 	if m.detailOpen {
 		left := "← Pull requests  /  " + safeText(m.detailKey)
 		if width >= 55 {
-			total := len(m.pullRequestDetailsView(width))
+			leftWidth, _ := m.reviewWidths(width)
+			total := len(m.pullRequestDetailsView(leftWidth))
 			progress := fmt.Sprintf("%d–%d / %d", min(m.detailScroll+1, total), min(m.detailScroll+m.detailViewportHeight(), total), total)
 			return "  " + alignStyled(left, progress, width, accentStyle, mutedStyle)
 		}
@@ -332,7 +352,7 @@ func (m model) helpView(width int) []string {
 	}
 	if m.detailOpen {
 		shortcuts = []string{
-			"↑/↓ or j/k  Scroll PR details and diff", "PgUp/PgDn    Scroll a screen", "Home / End   First / last line",
+			"↑/↓ or j/k  Scroll PR details and diff", "tab          Focus checks (wide terminals)", "PgUp/PgDn    Scroll a screen", "Home / End   First / last line",
 			"m            Merge pull request", "r            Refresh details and diff",
 			"esc          Return to PR inbox", "?            Close help", "q            Quit",
 		}
@@ -432,24 +452,16 @@ func (m model) pullRequestDetailsView(width int) []string {
 		"  "+mutedStyle.Render(clipLine(fmt.Sprintf("Branches: %s  →  %s", safeText(details.Head.Ref), safeText(details.Base.Ref)), width)),
 		"  "+mutedStyle.Render(clipLine("Updated "+relativeTime(details.UpdatedAt), width)),
 	)
-	if details.Mergeable == nil {
-		lines = append(lines, "  "+warnStyle.Render(clipLine("Mergeability: checking ("+safeText(details.MergeableState)+")", width)))
-	} else if *details.Mergeable {
-		lines = append(lines, "  "+goodStyle.Render(clipLine("Mergeability: mergeable ("+safeText(details.MergeableState)+")", width)))
-	} else {
-		lines = append(lines, "  "+warnStyle.Render(clipLine("Mergeability: blocked ("+safeText(details.MergeableState)+")", width)))
+	if !m.hasReviewSidebar() {
+		lines = append(lines, "", m.mergeabilityLine(width))
 	}
 	lines = append(lines, "", "  "+accentStyle.Render("DESCRIPTION"))
-	description := strings.TrimSpace(details.Body)
-	if description == "" {
-		lines = append(lines, "  "+mutedStyle.Render("(No description.)"))
-	} else {
-		wrapped := lipgloss.NewStyle().Width(max(1, width-2)).Render(safeMultiline(description))
-		for _, line := range strings.Split(wrapped, "\n") {
-			lines = append(lines, "  "+line)
-		}
-	}
+	lines = append(lines, markdownLines(details.Body, width)...)
 	lines = append(lines, m.pullRequestDiffLines(width)...)
+	if !m.hasReviewSidebar() {
+		lines = append(lines, "", "  "+accentStyle.Render(fmt.Sprintf("CHECKS (%d)", len(details.CheckRuns))))
+		lines = append(lines, m.checkStatusLines(width)...)
+	}
 	lines = append(lines, "", "  "+accentStyle.Render("REVIEW ACTIVITY"))
 	lines = append(lines, "  "+accentStyle.Render("Requested reviewers"))
 	if len(details.RequestedReviewers) == 0 {
@@ -482,30 +494,127 @@ func (m model) pullRequestDetailsView(width int) []string {
 			}
 		}
 	}
-	lines = append(lines, "  "+accentStyle.Render(fmt.Sprintf("Checks (%d)", len(details.CheckRuns))))
-	if details.ChecksError != "" {
-		lines = append(lines, "  "+errorStyle.Render(clipLine("Unavailable: "+safeText(details.ChecksError), width)))
-	} else if len(details.CheckRuns) == 0 {
-		lines = append(lines, "  "+mutedStyle.Render("No checks reported"))
-	} else {
-		for i, check := range details.CheckRuns {
-			if i == 8 {
-				lines = append(lines, "  "+mutedStyle.Render(fmt.Sprintf("… and %d more", len(details.CheckRuns)-i)))
-				break
+	return lines
+}
+
+func (m model) reviewWidths(width int) (left, right int) {
+	if width < 96 {
+		return width, 0
+	}
+	return width - 34, 32 // two-column layout with a two-cell gutter
+}
+
+func (m model) hasReviewSidebar() bool {
+	_, right := m.reviewWidths(max(1, m.width-4))
+	return right > 0
+}
+
+func (m model) mergeabilityLine(width int) string {
+	details := m.prDetails
+	var label string
+	style := warnStyle
+	switch {
+	case m.detailLoading && details.Number == 0:
+		label = "Mergeability: loading"
+	case details.Merged:
+		label, style = "Mergeability: merged", mergedBadge
+	case details.Draft:
+		label = "Mergeability: draft"
+	case details.Mergeable == nil:
+		label = "Mergeability: unknown"
+	case *details.Mergeable:
+		label, style = "Mergeability: mergeable", goodStyle
+	default:
+		label, style = "Mergeability: blocked", errorStyle
+	}
+	if details.MergeableState != "" {
+		label += " (" + safeText(details.MergeableState) + ")"
+	}
+	return "  " + style.Render(clipLine(label, width))
+}
+
+func checkStyle(check githubapi.CheckRun) (label string, style lipgloss.Style) {
+	state := check.Conclusion
+	if state == "" {
+		state = check.Status
+	}
+	switch state {
+	case "success":
+		return "PASS", goodStyle
+	case "neutral", "skipped":
+		return "SKIP", mutedStyle
+	case "failure", "timed_out", "action_required":
+		return "FAIL", errorStyle
+	case "cancelled":
+		return "CANCEL", warnStyle
+	case "queued", "in_progress", "pending", "waiting", "requested":
+		return "RUNNING", warnStyle
+	default:
+		return "UNKNOWN", mutedStyle
+	}
+}
+
+func (m model) checkStatusLines(width int) []string {
+	if m.prDetails.ChecksError != "" {
+		return panelMessage("Checks unavailable: "+m.prDetails.ChecksError, width, errorStyle)
+	}
+	if m.detailLoading && m.prDetails.Number == 0 {
+		return []string{"  " + warnStyle.Render("Loading checks…")}
+	}
+	if len(m.prDetails.CheckRuns) == 0 {
+		return []string{"  " + mutedStyle.Render("No checks reported")}
+	}
+	lines := make([]string, 0, len(m.prDetails.CheckRuns))
+	for _, check := range m.prDetails.CheckRuns {
+		label, style := checkStyle(check)
+		parts := wrapDiffLine(safeText(check.Name), max(1, width-lipgloss.Width(label)-2))
+		for i, part := range parts {
+			if i == 0 {
+				lines = append(lines, "  "+style.Render(label+"  "+part))
+			} else {
+				lines = append(lines, "  "+style.Render("↳ "+part))
 			}
-			status := check.Conclusion
-			if status == "" {
-				status = check.Status
-			}
-			style := warnStyle
-			switch status {
-			case "success", "neutral", "skipped":
-				style = goodStyle
-			case "failure", "timed_out", "action_required", "cancelled":
-				style = errorStyle
-			}
-			lines = append(lines, "  "+style.Render(clipLine(safeText(check.Name)+": "+strings.ToUpper(safeText(status)), width)))
 		}
+	}
+	return lines
+}
+
+func (m model) maxChecksScroll() int {
+	_, width := m.reviewWidths(max(1, m.width-4))
+	if width == 0 {
+		return 0
+	}
+	if m.detailViewportHeight() <= 5 {
+		return 0
+	}
+	available := max(1, m.detailViewportHeight()-5)
+	return max(0, len(m.checkStatusLines(width-2))-available)
+}
+
+func (m model) reviewSidebar(width, height int) []string {
+	inner := max(1, width-2)
+	heading := "READINESS"
+	if m.checksFocus {
+		heading += "  ·  FOCUSED"
+	}
+	lines := []string{
+		"  " + accentStyle.Render(clipLine(heading, inner)),
+		m.mergeabilityLine(inner),
+		"  " + mutedStyle.Render(strings.Repeat("─", inner)),
+		"  " + accentStyle.Render(clipLine(fmt.Sprintf("CHECKS  (%d)", len(m.prDetails.CheckRuns)), inner)),
+	}
+	if len(lines) >= height {
+		return lines[:height]
+	}
+	checks := m.checkStatusLines(inner)
+	visible := max(1, height-len(lines)-1)
+	start := min(max(0, m.checksScroll), max(0, len(checks)-visible))
+	end := min(len(checks), start+visible)
+	lines = append(lines, checks[start:end]...)
+	if len(checks) > visible {
+		lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d/%d · tab, j/k", start+1, end, len(checks)), inner)))
+	} else {
+		lines = append(lines, "  "+mutedStyle.Render(clipLine("tab focus  ·  j/k scroll", inner)))
 	}
 	return lines
 }
@@ -608,7 +717,7 @@ func (m model) pullRequestDiffLines(width int) []string {
 			lines = append(lines, "  "+mutedStyle.Render(clipLine("GitHub did not provide a patch (binary or too large).", width)))
 			continue
 		}
-		lines = append(lines, renderPatch(file.Patch, width)...)
+		lines = append(lines, renderFilePatch(file.Patch, file.Filename, width)...)
 	}
 	return lines
 }
@@ -616,6 +725,14 @@ func (m model) pullRequestDiffLines(width int) []string {
 // renderPatch keeps unified-diff line numbers intact while wrapping long code
 // lines instead of silently hiding the remainder offscreen.
 func renderPatch(patch string, width int) []string {
+	return renderDiffPatch(patch, width, nil)
+}
+
+func renderFilePatch(patch, filename string, width int) []string {
+	return renderDiffPatch(patch, width, lexers.Match(filename))
+}
+
+func renderDiffPatch(patch string, width int, lexer chroma.Lexer) []string {
 	var lines []string
 	oldLine, newLine := 0, 0
 	for _, raw := range strings.Split(strings.TrimSuffix(patch, "\n"), "\n") {
@@ -653,10 +770,41 @@ func renderPatch(patch string, width int) []string {
 			if i > 0 {
 				prefix = strings.Repeat(" ", lipgloss.Width(gutter)-2) + "↳ "
 			}
+			if lexer != nil && lipgloss.ColorProfile() != termenv.Ascii &&
+				!strings.HasPrefix(line, "\\") && !strings.HasPrefix(line, "+++") && !strings.HasPrefix(line, "---") {
+				marker, code := "", part
+				if i == 0 && len(part) > 0 {
+					marker, code = part[:1], part[1:]
+				}
+				part = marker + highlightCode(code, lexer, style)
+			}
 			lines = append(lines, "  "+style.Width(width).Render(prefix+part))
 		}
 	}
 	return lines
+}
+
+func highlightCode(code string, lexer chroma.Lexer, background lipgloss.Style) string {
+	tokens, err := chroma.Tokenise(lexer, nil, code)
+	if err != nil {
+		return code
+	}
+	var result strings.Builder
+	for _, token := range tokens {
+		style := background
+		switch {
+		case token.Type.InCategory(chroma.Keyword):
+			style = style.Foreground(lipgloss.Color("#D6C5FF")).Bold(true)
+		case token.Type.InCategory(chroma.LiteralString):
+			style = style.Foreground(lipgloss.Color("#FBD389"))
+		case token.Type.InCategory(chroma.LiteralNumber):
+			style = style.Foreground(lipgloss.Color("#82E9F0"))
+		case token.Type.InCategory(chroma.Comment):
+			style = style.Foreground(lipgloss.Color("#A1AAC4"))
+		}
+		result.WriteString(style.Render(token.Value))
+	}
+	return result.String()
 }
 
 func wrapDiffLine(line string, width int) []string {
@@ -798,6 +946,9 @@ func (m model) footer(width int) string {
 			help = "y confirm merge   esc cancel"
 		default:
 			help = "esc back   ↑/↓ scroll   PgUp/PgDn page   m merge"
+			if m.hasReviewSidebar() {
+				help = "tab checks/diff   j/k scroll   m merge   esc back"
+			}
 		}
 	} else {
 		switch m.activeSection {

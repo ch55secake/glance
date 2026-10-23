@@ -280,7 +280,7 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 		t.Fatalf("details were not loaded: %+v", m)
 	}
 	view := strings.Join(m.pullRequestDetailsView(76), "\n")
-	for _, text := range []string{"octo/project#42", "Useful change", "Branches: feature", "main", "@hubot", "APPROVED", "CI: SUCCESS", "A detailed description."} {
+	for _, text := range []string{"octo/project#42", "Useful change", "Branches: feature", "main", "@hubot", "APPROVED", "PASS  CI", "A detailed description."} {
 		if !strings.Contains(view, text) {
 			t.Errorf("details view missing %q: %s", text, view)
 		}
@@ -463,7 +463,7 @@ func TestMergeActionsStayVisibleWhileScrollingDiff(t *testing.T) {
 }
 
 func TestPullRequestDiffLayoutsAndUnavailablePatches(t *testing.T) {
-	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
+	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {100, 18}, {120, 36}} {
 		for _, state := range []string{"normal", "binary", "error"} {
 			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, state), func(t *testing.T) {
 				m := initialModel()
@@ -596,7 +596,7 @@ func TestMergeFailureIsShownWithoutRefreshingDashboard(t *testing.T) {
 }
 
 func TestPullRequestDetailsScrollAndLayout(t *testing.T) {
-	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
+	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {100, 18}, {120, 36}} {
 		for _, state := range []string{"normal", "choosing", "confirming", "merge-error"} {
 			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, state), func(t *testing.T) {
 				m := initialModel()
