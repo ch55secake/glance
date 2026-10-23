@@ -46,8 +46,8 @@ type model struct {
 	detailScroll         int
 	detailLines          []string
 	detailLinesWidth     int
-	checksScroll         int
-	checksFocus          bool
+	sidebarScroll        int
+	sidebarFocus         bool
 	prDetails            githubapi.PullRequestDetails
 	diffLoading          bool
 	diffLoaded           bool
@@ -167,8 +167,8 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	m.mergeInProgress = false
 	m.detailScroll = 0
 	m.detailLines = nil
-	m.checksScroll = 0
-	m.checksFocus = false
+	m.sidebarScroll = 0
+	m.sidebarFocus = false
 	m.diffLoading = true
 	m.diffLoaded = false
 	m.diffError = ""
@@ -291,44 +291,44 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detailOpen = false
 		m.detailScroll = 0
 	case "up", "k":
-		if m.checksFocus {
-			m.checksScroll = max(0, m.checksScroll-1)
+		if m.sidebarFocus {
+			m.sidebarScroll = max(0, m.sidebarScroll-1)
 		} else {
 			m.detailScroll = max(0, m.detailScroll-1)
 		}
 	case "down", "j":
-		if m.checksFocus {
-			m.checksScroll = min(m.maxChecksScroll(), m.checksScroll+1)
+		if m.sidebarFocus {
+			m.sidebarScroll = min(m.maxSidebarScroll(), m.sidebarScroll+1)
 		} else {
 			m.detailScroll = min(m.maxDetailScroll(), m.detailScroll+1)
 		}
 	case "pgup", "ctrl+u":
-		if m.checksFocus {
-			m.checksScroll = max(0, m.checksScroll-m.detailViewportHeight())
+		if m.sidebarFocus {
+			m.sidebarScroll = max(0, m.sidebarScroll-m.detailViewportHeight())
 		} else {
 			m.detailScroll = max(0, m.detailScroll-m.detailViewportHeight())
 		}
 	case "pgdown", "ctrl+d":
-		if m.checksFocus {
-			m.checksScroll = min(m.maxChecksScroll(), m.checksScroll+m.detailViewportHeight())
+		if m.sidebarFocus {
+			m.sidebarScroll = min(m.maxSidebarScroll(), m.sidebarScroll+m.detailViewportHeight())
 		} else {
 			m.detailScroll = min(m.maxDetailScroll(), m.detailScroll+m.detailViewportHeight())
 		}
 	case "home":
-		if m.checksFocus {
-			m.checksScroll = 0
+		if m.sidebarFocus {
+			m.sidebarScroll = 0
 		} else {
 			m.detailScroll = 0
 		}
 	case "end":
-		if m.checksFocus {
-			m.checksScroll = m.maxChecksScroll()
+		if m.sidebarFocus {
+			m.sidebarScroll = m.maxSidebarScroll()
 		} else {
 			m.detailScroll = m.maxDetailScroll()
 		}
 	case "tab":
 		if m.hasReviewSidebar() {
-			m.checksFocus = !m.checksFocus
+			m.sidebarFocus = !m.sidebarFocus
 		}
 	case "r", "R":
 		if !m.detailLoading && !m.diffLoading {
@@ -406,10 +406,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cacheDetailLines()
 		}
 		if !m.hasReviewSidebar() {
-			m.checksFocus = false
-			m.checksScroll = 0
+			m.sidebarFocus = false
+			m.sidebarScroll = 0
 		} else {
-			m.checksScroll = min(m.checksScroll, m.maxChecksScroll())
+			m.sidebarScroll = min(m.sidebarScroll, m.maxSidebarScroll())
 		}
 		if m.detailOpen {
 			m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
@@ -460,7 +460,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailLines = nil
 		m.cacheDetailLines()
 		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
-		m.checksScroll = min(m.checksScroll, m.maxChecksScroll())
+		m.sidebarScroll = min(m.sidebarScroll, m.maxSidebarScroll())
 	case pullRequestFilesLoadedMsg:
 		if msg.requestID != m.diffRequestID || msg.key != m.detailKey {
 			break

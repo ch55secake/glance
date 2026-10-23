@@ -101,6 +101,8 @@ func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 	m.prDetails = githubapi.PullRequestDetails{
 		PullRequest: githubapi.PullRequest{Number: 42, Repository: "octo/repo", Title: "Review", State: "open"},
 		Mergeable:   &mergeable, MergeableState: "dirty",
+		RequestedReviewers: []githubapi.User{{Login: "hubot"}},
+		Reviews:            []githubapi.PullRequestReview{{User: githubapi.User{Login: "reviewer"}, State: "APPROVED"}},
 	}
 	for i := range 14 {
 		conclusion := "success"
@@ -116,6 +118,9 @@ func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 	}
 	m.diffLoaded = true
 	m.diffFiles = []githubapi.PullRequestFile{{Filename: "app.go", Patch: "@@ -1 +1 @@\n" + strings.Repeat("+func main() {}\n", 25)}}
+	if left := strings.Join(m.pullRequestDetailsView(82), "\n"); strings.Contains(left, "REVIEW ACTIVITY") || strings.Contains(left, "@reviewer: APPROVED") {
+		t.Errorf("review activity is still in the wide diff column: %s", left)
+	}
 	view := m.View()
 	for _, want := range []string{"CHANGED FILES", "READINESS", "blocked (dirty)", "CHECKS", "FAIL  CI check 00", "PASS  CI check 01", "tab, j/k"} {
 		if !strings.Contains(view, want) {
@@ -132,8 +137,13 @@ func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = updated.(model)
-	if !m.checksFocus || m.checksScroll == 0 || m.detailScroll != mainScroll || !strings.Contains(m.View(), "RUNNING  CI check 13") {
-		t.Fatalf("check scrolling changed diff position or hid last check: main=%d checks=%d\n%s", m.detailScroll, m.checksScroll, m.View())
+	if !m.sidebarFocus || m.sidebarScroll == 0 || m.detailScroll != mainScroll || !strings.Contains(m.View(), "REVIEW ACTIVITY") || !strings.Contains(m.View(), "@reviewer: APPROVED") {
+		t.Fatalf("sidebar scrolling changed diff position or hid review activity: main=%d sidebar=%d\n%s", m.detailScroll, m.sidebarScroll, m.View())
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m = updated.(model)
+	if m.sidebarScroll != 0 || m.detailScroll != mainScroll || !strings.Contains(m.View(), "FAIL  CI check 00") {
+		t.Fatalf("returning to checks moved the diff or hid checks: %s", m.View())
 	}
 	for _, line := range strings.Split(m.View(), "\n") {
 		if got := lipgloss.Width(line); got > m.width {
@@ -142,7 +152,7 @@ func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(model)
-	if m.checksFocus || m.checksScroll != 0 || m.detailScroll > m.maxDetailScroll() {
+	if m.sidebarFocus || m.sidebarScroll != 0 || m.detailScroll > m.maxDetailScroll() {
 		t.Errorf("narrow resize did not restore main scroll focus: %+v", m)
 	}
 }
@@ -153,19 +163,61 @@ func TestNarrowReviewStacksChecksAfterDiff(t *testing.T) {
 	m.detailOpen = true
 	m.detailKey = "octo/repo#42"
 	m.prDetails = githubapi.PullRequestDetails{
-		PullRequest: githubapi.PullRequest{Number: 42, Repository: "octo/repo", State: "open"},
-		Body:        "Description",
-		CheckRuns:   []githubapi.CheckRun{{Name: "test", Status: "completed", Conclusion: "success"}},
+		PullRequest:        githubapi.PullRequest{Number: 42, Repository: "octo/repo", State: "open"},
+		Body:               "Description",
+		CheckRuns:          []githubapi.CheckRun{{Name: "test", Status: "completed", Conclusion: "success"}},
+		RequestedReviewers: []githubapi.User{{Login: "reviewer"}},
+		Reviews:            []githubapi.PullRequestReview{{User: githubapi.User{Login: "hubot"}, State: "APPROVED"}},
 	}
 	lines := strings.Join(m.pullRequestDetailsView(76), "\n")
 	if !strings.Contains(lines, "Mergeability: unknown") || !strings.Contains(lines, "PASS  test") ||
 		strings.Index(lines, "DESCRIPTION") >= strings.Index(lines, "CHANGED FILES") ||
-		strings.Index(lines, "CHANGED FILES") >= strings.Index(lines, "PASS  test") {
+		strings.Index(lines, "CHANGED FILES") >= strings.Index(lines, "PASS  test") ||
+		strings.Index(lines, "PASS  test") >= strings.Index(lines, "REVIEW ACTIVITY") ||
+		!strings.Contains(lines, "@reviewer") || !strings.Contains(lines, "@hubot: APPROVED") {
 		t.Errorf("narrow review did not keep description and diff ahead of checks:\n%s", lines)
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if updated.(model).checksFocus {
+	if updated.(model).sidebarFocus {
 		t.Fatal("tab stole focus on a stacked narrow layout")
+	}
+}
+
+func TestSidebarReviewActivityKeepsAllReviewersAndReviews(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 120, 24
+	m.detailOpen = true
+	m.detailKey = "octo/repo#42"
+	m.prDetails.Number = 42
+	for i := range 10 {
+		login := fmt.Sprintf("reviewer%02d", i)
+		m.prDetails.RequestedReviewers = append(m.prDetails.RequestedReviewers, githubapi.User{Login: login})
+		m.prDetails.Reviews = append(m.prDetails.Reviews, githubapi.PullRequestReview{
+			User: githubapi.User{Login: login}, State: "CHANGES_REQUESTED",
+		})
+	}
+	// Duplicate submissions from one reviewer should still render once.
+	m.prDetails.Reviews = append(m.prDetails.Reviews, m.prDetails.Reviews[0])
+	activity := strings.Join(m.reviewActivityLines(30), "\n")
+	for _, want := range []string{"◇ REVIEW ACTIVITY", "@reviewer00", "@reviewer09: CHANGES_", "REQUESTED"} {
+		if !strings.Contains(activity, want) {
+			t.Errorf("activity missing %q: %s", want, activity)
+		}
+	}
+	if strings.Count(activity, "@reviewer00: ") != 1 {
+		t.Errorf("repeat review was not deduplicated: %s", activity)
+	}
+	for _, line := range m.reviewActivityLines(30) {
+		if lipgloss.Width(line) > 32 {
+			t.Errorf("review activity exceeds sidebar width: %q", line)
+		}
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = updated.(model)
+	if !strings.Contains(m.View(), "@reviewer09: CHANGES_") || m.sidebarScroll != m.maxSidebarScroll() {
+		t.Errorf("last review unreachable in sidebar: %s", m.View())
 	}
 }
 

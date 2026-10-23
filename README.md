@@ -40,13 +40,13 @@ or `j`/`k` to scroll through the details and diff, `PgUp`/`PgDn` to move by a
 screen, and `esc` to return to the same inbox position. Diff additions,
 deletions, hunks, old/new line numbers, and recognized source code are highlighted;
 long lines wrap. PR descriptions render as Markdown, including lists and fenced
-code. On wide terminals, mergeability and all checks stay in a right-hand panel;
-press `tab` to focus it and use `j`/`k` or `PgUp`/`PgDn` to scroll its checks
-independently. On narrow terminals, checks appear below the diff. The merge
-action stays visible while scrolling. Press `m` to select an enabled merge
-method with up/down or `j`/`k`, press `enter`, then confirm with `y`. glance
-sends the merge through the GitHub API using the loaded head SHA and refreshes
-the dashboard afterwards.
+code. On wide terminals, mergeability, checks, and review activity are in a
+right-hand panel; press `tab` to focus it and use `j`/`k` or `PgUp`/`PgDn` to
+scroll it independently. On narrow terminals, checks and reviews appear below
+the diff. The merge action stays visible while scrolling. Press `m` to select
+an enabled merge method with up/down or `j`/`k`, press `enter`, then confirm
+with `y`. glance sends the merge through the GitHub API using the loaded head
+SHA and refreshes the dashboard afterwards.
 The Issues section lists open issues across accessible repositories with labels
 and comment counts. Notifications shows read and unread threads and their
 reasons; use up/down or `j`/`k` to navigate either list. Overview shows counts
