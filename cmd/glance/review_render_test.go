@@ -186,6 +186,42 @@ func TestLongCheckNamesWrapWithoutHidingStatus(t *testing.T) {
 	}
 }
 
+func TestReadinessSymbolsAreDistinctWithoutColor(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.Ascii)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	for _, check := range []struct{ conclusion, status, symbol string }{
+		{"success", "completed", "✓ PASS"},
+		{"failure", "completed", "✕ FAIL"},
+		{"skipped", "completed", "– SKIP"},
+		{"cancelled", "completed", "! CANCEL"},
+		{"", "in_progress", "◌ RUNNING"},
+		{"", "", "? UNKNOWN"},
+	} {
+		label, _ := checkStyle(githubapi.CheckRun{Conclusion: check.conclusion, Status: check.status})
+		if label != check.symbol {
+			t.Errorf("check %q/%q: got %q, want %q", check.conclusion, check.status, label, check.symbol)
+		}
+	}
+	m := initialModel()
+	m.width = 100
+	m.detailOpen = true
+	for _, tc := range []struct {
+		mergeable *bool
+		want      string
+	}{
+		{nil, "? Mergeability: unknown"},
+		{new(true), "✓ Mergeability: mergeable"},
+		{new(false), "✕ Mergeability: blocked"},
+	} {
+		m.prDetails.Mergeable = tc.mergeable
+		line := m.mergeabilityLine(30)
+		if !strings.Contains(line, tc.want) || lipgloss.Width(line) > 32 || strings.Contains(line, "\x1b[") {
+			t.Errorf("monochrome readiness lost its symbol or exceeded the sidebar: %q", line)
+		}
+	}
+}
+
 func TestMarkdownRendersFormattingAndFencedCode(t *testing.T) {
 	previous := lipgloss.ColorProfile()
 	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })

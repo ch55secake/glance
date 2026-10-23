@@ -462,14 +462,14 @@ func (m model) renderPullRequestDetails(width int) []string {
 	if !m.hasReviewSidebar() {
 		lines = append(lines, "", m.mergeabilityLine(width))
 	}
-	lines = append(lines, "", "  "+accentStyle.Render("DESCRIPTION"))
+	lines = append(lines, "", "  "+accentStyle.Render("▤ DESCRIPTION"))
 	lines = append(lines, markdownLines(details.Body, width)...)
 	lines = append(lines, m.pullRequestDiffLines(width)...)
 	if !m.hasReviewSidebar() {
-		lines = append(lines, "", "  "+accentStyle.Render(fmt.Sprintf("CHECKS (%d)", len(details.CheckRuns))))
+		lines = append(lines, "", "  "+accentStyle.Render(fmt.Sprintf("◉ CHECKS (%d)", len(details.CheckRuns))))
 		lines = append(lines, m.checkStatusLines(width)...)
 	}
-	lines = append(lines, "", "  "+accentStyle.Render("REVIEW ACTIVITY"))
+	lines = append(lines, "", "  "+accentStyle.Render("◇ REVIEW ACTIVITY"))
 	lines = append(lines, "  "+accentStyle.Render("Requested reviewers"))
 	if len(details.RequestedReviewers) == 0 {
 		lines = append(lines, "  "+mutedStyle.Render("None"))
@@ -517,27 +517,34 @@ func (m model) hasReviewSidebar() bool {
 }
 
 func (m model) mergeabilityLine(width int) string {
+	return m.mergeabilityStatus(width, false)
+}
+
+func (m model) mergeabilityStatus(width int, compact bool) string {
 	details := m.prDetails
-	var label string
+	var symbol, label string
 	style := warnStyle
 	switch {
 	case m.detailLoading && details.Number == 0:
-		label = "Mergeability: loading"
+		symbol, label = "◌", "loading"
 	case details.Merged:
-		label, style = "Mergeability: merged", mergedBadge
+		symbol, label, style = "✓", "merged", mergedBadge
 	case details.Draft:
-		label = "Mergeability: draft"
+		symbol, label = "◇", "draft"
 	case details.Mergeable == nil:
-		label = "Mergeability: unknown"
+		symbol, label = "?", "unknown"
 	case *details.Mergeable:
-		label, style = "Mergeability: mergeable", goodStyle
+		symbol, label, style = "✓", "mergeable", goodStyle
 	default:
-		label, style = "Mergeability: blocked", errorStyle
+		symbol, label, style = "✕", "blocked", errorStyle
 	}
 	if details.MergeableState != "" {
 		label += " (" + safeText(details.MergeableState) + ")"
 	}
-	return "  " + style.Render(clipLine(label, width))
+	if !compact {
+		label = "Mergeability: " + label
+	}
+	return "  " + style.Render(clipLine(symbol+" "+label, width))
 }
 
 func checkStyle(check githubapi.CheckRun) (label string, style lipgloss.Style) {
@@ -547,17 +554,17 @@ func checkStyle(check githubapi.CheckRun) (label string, style lipgloss.Style) {
 	}
 	switch state {
 	case "success":
-		return "PASS", goodStyle
+		return "✓ PASS", goodStyle
 	case "neutral", "skipped":
-		return "SKIP", mutedStyle
+		return "– SKIP", mutedStyle
 	case "failure", "timed_out", "action_required":
-		return "FAIL", errorStyle
+		return "✕ FAIL", errorStyle
 	case "cancelled":
-		return "CANCEL", warnStyle
+		return "! CANCEL", warnStyle
 	case "queued", "in_progress", "pending", "waiting", "requested":
-		return "RUNNING", warnStyle
+		return "◌ RUNNING", warnStyle
 	default:
-		return "UNKNOWN", mutedStyle
+		return "? UNKNOWN", mutedStyle
 	}
 }
 
@@ -600,15 +607,15 @@ func (m model) maxChecksScroll() int {
 
 func (m model) reviewSidebar(width, height int) []string {
 	inner := max(1, width-2)
-	heading := "READINESS"
+	heading := "◈ READINESS"
 	if m.checksFocus {
 		heading += "  ·  FOCUSED"
 	}
 	lines := []string{
 		"  " + accentStyle.Render(clipLine(heading, inner)),
-		m.mergeabilityLine(inner),
+		m.mergeabilityStatus(inner, true),
 		"  " + mutedStyle.Render(strings.Repeat("─", inner)),
-		"  " + accentStyle.Render(clipLine(fmt.Sprintf("CHECKS  (%d)", len(m.prDetails.CheckRuns)), inner)),
+		"  " + accentStyle.Render(clipLine(fmt.Sprintf("◉ CHECKS  (%d)", len(m.prDetails.CheckRuns)), inner)),
 	}
 	if len(lines) >= height {
 		return lines[:height]
@@ -658,7 +665,7 @@ func (m model) mergeActionPanel(width int) []string {
 		)
 		return lines
 	default:
-		return append(lines, "  "+accentStyle.Render(clipLine("ACTIONS  ·  m merge  ·  r refresh  ·  esc back", width)))
+		return append(lines, "  "+accentStyle.Render(clipLine("◆ ACTIONS  ·  m merge  ·  r refresh  ·  esc back", width)))
 	}
 }
 
@@ -678,7 +685,7 @@ func panelMessage(message string, width int, style lipgloss.Style) []string {
 }
 
 func (m model) pullRequestDiffLines(width int) []string {
-	lines := []string{"", "  " + accentStyle.Render("CHANGED FILES")}
+	lines := []string{"", "  " + accentStyle.Render("▥ CHANGED FILES")}
 	if m.diffLoading && !m.diffLoaded {
 		return append(lines, "  "+warnStyle.Render("Loading changed files and patches from GitHub…"))
 	}
