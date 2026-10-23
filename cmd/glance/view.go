@@ -85,7 +85,9 @@ func (m model) View() string {
 		lines = append(lines, m.placeholderView(inner)...)
 	}
 
-	lines = append(lines, "", m.footer(inner))
+	if !m.detailOpen || m.showHelp {
+		lines = append(lines, "", m.footer(inner))
+	}
 	// Keep the view inside the terminal even on small screens or verbose API errors.
 	viewLines := strings.Split(strings.Join(lines, "\n"), "\n")
 	if m.height > 3 && len(viewLines) > m.height {
@@ -119,14 +121,19 @@ func (m model) header(width int) string {
 
 func (m model) navigation(width int) string {
 	if m.detailOpen {
-		left := "← Pull requests  /  " + safeText(m.detailKey)
+		left := "  ← Pull requests  /  " + safeText(m.detailKey)
+		style := mutedStyle
+		if !m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp {
+			left = "▎ ← Pull requests  /  " + safeText(m.detailKey)
+			style = activeStyle
+		}
 		if width >= 55 {
 			leftWidth, _ := m.reviewWidths(width)
 			total := len(m.pullRequestDetailsView(leftWidth))
 			progress := fmt.Sprintf("%d–%d / %d", min(m.detailScroll+1, total), min(m.detailScroll+m.detailViewportHeight(), total), total)
-			return "  " + alignStyled(left, progress, width, accentStyle, mutedStyle)
+			return "  " + alignStyled(left, progress, width, style, mutedStyle)
 		}
-		return "  " + accentStyle.Render(clipLine(left, width))
+		return "  " + style.Render(clipLine(left, width))
 	}
 	if width < 65 {
 		label := fmt.Sprintf("%d / %d  %s", m.activeSection+1, len(sections), sections[m.activeSection])
@@ -635,12 +642,14 @@ func (m model) sidebarContent(width int) []string {
 
 func (m model) reviewSidebar(width, height int) []string {
 	inner := max(1, width-2)
-	heading := "◈ READINESS"
-	if m.sidebarFocus {
-		heading += "  ·  FOCUSED"
+	heading := "  ◈ READINESS"
+	headingStyle := accentStyle
+	if m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp {
+		heading = "▎ ◈ READINESS"
+		headingStyle = activeStyle
 	}
 	lines := []string{
-		"  " + accentStyle.Render(clipLine(heading, inner)),
+		"  " + headingStyle.Render(clipLine(heading, inner)),
 		m.mergeabilityStatus(inner, true),
 		"  " + mutedStyle.Render(strings.Repeat("─", inner)),
 		"  " + accentStyle.Render(clipLine(fmt.Sprintf("◉ CHECKS  (%d)", len(m.prDetails.CheckRuns)), inner)),
@@ -654,9 +663,9 @@ func (m model) reviewSidebar(width, height int) []string {
 	end := min(len(content), start+visible)
 	lines = append(lines, content[start:end]...)
 	if len(content) > visible {
-		lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d/%d · tab, j/k", start+1, end, len(content)), inner)))
+		lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d / %d", start+1, end, len(content)), inner)))
 	} else {
-		lines = append(lines, "  "+mutedStyle.Render(clipLine("tab focus  ·  j/k scroll", inner)))
+		lines = append(lines, "")
 	}
 	return lines
 }
@@ -693,7 +702,21 @@ func (m model) mergeActionPanel(width int) []string {
 		)
 		return lines
 	default:
-		return append(lines, "  "+accentStyle.Render(clipLine("◆ ACTIONS  ·  m merge  ·  r refresh  ·  esc back", width)))
+		actions := "◆ ACTIONS  ·  m merge  ·  r refresh  ·  esc back"
+		guidance := "↑/↓ or j/k scroll  ·  PgUp/PgDn page  ·  ? help"
+		if width < 45 {
+			actions = "◆ ACTIONS  ·  m merge"
+			guidance = "esc back  ·  r refresh  ·  ↑/↓"
+		} else if width < 70 {
+			actions = "◆ ACTIONS  ·  m merge  ·  esc back"
+			guidance = "r refresh  ·  ↑/↓ scroll  ·  PgUp/PgDn"
+		} else if m.hasReviewSidebar() {
+			guidance = "tab switch pane  ·  ↑/↓ scroll  ·  PgUp/PgDn page  ·  ? help"
+		}
+		return append(lines,
+			"  "+accentStyle.Render(clipLine(actions, width)),
+			"  "+mutedStyle.Render(clipLine(guidance, width)),
+		)
 	}
 }
 

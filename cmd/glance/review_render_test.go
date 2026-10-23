@@ -122,7 +122,7 @@ func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 		t.Errorf("review activity is still in the wide diff column: %s", left)
 	}
 	view := m.View()
-	for _, want := range []string{"CHANGED FILES", "READINESS", "blocked (dirty)", "CHECKS", "FAIL  CI check 00", "PASS  CI check 01", "tab, j/k"} {
+	for _, want := range []string{"CHANGED FILES", "READINESS", "blocked (dirty)", "CHECKS", "FAIL  CI check 00", "PASS  CI check 01", "tab switch pane"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("wide review missing %q:\n%s", want, view)
 		}
@@ -154,6 +154,85 @@ func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 	m = updated.(model)
 	if m.sidebarFocus || m.sidebarScroll != 0 || m.detailScroll > m.maxDetailScroll() {
 		t.Errorf("narrow resize did not restore main scroll focus: %+v", m)
+	}
+}
+
+func TestReviewFocusIsVisualAndControlsLiveInActionPanel(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	for _, profile := range []termenv.Profile{termenv.TrueColor, termenv.Ascii} {
+		lipgloss.SetColorProfile(profile)
+		m := initialModel()
+		m.width, m.height = 120, 24
+		m.detailOpen = true
+		m.detailKey = "octo/repo#42"
+		m.prDetails.Number = 42
+		m.diffLoaded = true
+		m.diffFiles = []githubapi.PullRequestFile{{Filename: "main.go", Patch: "@@ -1 +1 @@\n" + strings.Repeat("+line\n", 30)}}
+		for _, focused := range []bool{false, true} {
+			m.sidebarFocus = focused
+			view := m.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) != m.height {
+				t.Errorf("focus %t: review uses %d rows, want %d", focused, len(lines), m.height)
+			}
+			if strings.Contains(view, "FOCUSED") || strings.Count(view, "m merge") != 1 ||
+				!strings.Contains(view, "tab switch pane") || !strings.Contains(view, "PgUp/PgDn page") {
+				t.Errorf("focus %t: redundant footer or missing pinned controls: %s", focused, view)
+			}
+			breadcrumb := m.navigation(m.width - 4)
+			sidebar := m.reviewSidebar(32, m.detailViewportHeight())[0]
+			if focused && (!strings.Contains(sidebar, "▎") || strings.Contains(breadcrumb, "▎")) ||
+				!focused && (!strings.Contains(breadcrumb, "▎") || strings.Contains(sidebar, "▎")) {
+				t.Errorf("focus %t: active pane lacks its visual indicator: %q / %q", focused, breadcrumb, sidebar)
+			}
+			if profile == termenv.TrueColor {
+				active := breadcrumb
+				if focused {
+					active = sidebar
+				}
+				if !strings.Contains(active, "48;2;") {
+					t.Errorf("focus %t: active pane lacks highlight color: %q", focused, active)
+				}
+			} else if strings.Contains(view, "\x1b[") {
+				t.Errorf("focus %t: monochrome review emits color: %q", focused, view)
+			}
+		}
+	}
+}
+
+func TestReviewActionPanelControlsAcrossWidths(t *testing.T) {
+	for _, width := range []int{30, 45, 50, 72, 120} {
+		m := initialModel()
+		m.width, m.height = width, 16
+		m.detailOpen = true
+		m.prDetails.Number = 42
+		view := m.View()
+		if !strings.Contains(view, "◆ ACTIONS") || !strings.Contains(view, "esc back") || strings.Count(view, "m merge") != 1 {
+			t.Errorf("review controls are clipped or repeated at width %d: %s", width, view)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got > m.width {
+				t.Errorf("review line exceeds %d columns (%d): %q", m.width, got, line)
+			}
+		}
+	}
+}
+
+func TestMergeChooserTakesFocusFromReviewPanes(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 120, 24
+	m.detailOpen = true
+	m.prDetails.Number = 42
+	m.prDetails.State = "open"
+	m.prDetails.Head.SHA = "sha"
+	m.prDetails.AllowedMergeMethods = []githubapi.MergeMethod{githubapi.MergeCommit}
+	updated, _ := m.Update(key("m"))
+	m = updated.(model)
+	if m.mergeDialog != chooseMergeMethod || strings.Contains(m.navigation(116), "▎") ||
+		strings.Contains(m.reviewSidebar(32, m.detailViewportHeight())[0], "▎") ||
+		!strings.Contains(m.View(), "▸ 1  Merge commit") {
+		t.Errorf("merge chooser did not become the visual focus: %s", m.View())
 	}
 }
 
