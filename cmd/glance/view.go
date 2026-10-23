@@ -373,12 +373,16 @@ func (m model) helpView(width int) []string {
 
 func (m model) pullRequestView(width int) []string {
 	items := m.filteredPRs()
-	heading := "PULL REQUESTS"
+	heading := "◈ PULL REQUESTS"
 	if m.loading && len(m.pullRequests) > 0 {
 		heading += "  ↻ Refreshing"
 	}
+	count := fmt.Sprintf("%d open", len(m.pullRequests))
+	if len(items) != len(m.pullRequests) {
+		count = fmt.Sprintf("%d/%d shown", len(items), len(m.pullRequests))
+	}
 	lines := []string{
-		"  " + align(accentStyle.Render(clipLine(heading, width-8)), mutedStyle.Render(fmt.Sprintf("%d open", len(m.pullRequests))), width),
+		"  " + align(accentStyle.Render(clipLine(heading, max(1, width-lipgloss.Width(count)-1))), mutedStyle.Render(count), width),
 		"  " + m.filterBar(width),
 	}
 	if m.query != "" || m.searching {
@@ -409,7 +413,7 @@ func (m model) pullRequestView(width int) []string {
 	for i := start; i < end; i++ {
 		lines = append(lines, m.prRow(items[i], width, i == m.selectedPR)...)
 	}
-	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d of %d  ·  j/k move  ·  / search", start+1, end, len(items)), width)))
+	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d/%d selected  ·  showing %d–%d  ·  ↵ review  ·  / search", m.selectedPR+1, len(items), start+1, end), width)))
 	return lines
 }
 
@@ -651,12 +655,12 @@ func (m model) mergeActionPanel(width int) []string {
 		for i, method := range m.prDetails.AllowedMergeMethods {
 			choice := fmt.Sprintf(" %d  %s ", i+1, mergeMethodLabel(method))
 			if i == m.mergeMethodIndex {
-				lines = append(lines, "  "+activeStyle.Render(clipLine(choice, width)))
+				lines = append(lines, "  "+activeStyle.Render(clipLine("▸"+choice, width)))
 			} else {
-				lines = append(lines, "  "+mutedStyle.Render(clipLine(choice, width)))
+				lines = append(lines, "  "+mutedStyle.Render(clipLine(" "+choice, width)))
 			}
 		}
-		return append(lines, "  "+mutedStyle.Render(clipLine("←/→ choose  ·  enter continue  ·  esc cancel", width)))
+		return append(lines, "  "+mutedStyle.Render(clipLine("↑/↓ or j/k choose  ·  enter continue  ·  esc cancel", width)))
 	case m.mergeDialog == confirmMerge:
 		lines = append(lines,
 			"  "+warnStyle.Render(clipLine("Confirm merge  ·  "+mergeMethodLabel(m.mergeMethod), width)),
@@ -906,26 +910,25 @@ func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []strin
 			state = openBadge.Render(state)
 		}
 	}
-	// Reserve room for the marker and keep the repository and PR number visible.
+	// Keep the number visible if a long repository name needs clipping.
+	labelWidth := max(1, width-lipgloss.Width(state)-3)
 	label := fmt.Sprintf("%s#%d", safeText(pr.Repository), pr.Number)
-	if width >= 60 {
-		age := relativeTime(pr.UpdatedAt)
-		if !selected {
-			age = mutedStyle.Render(age)
-		}
-		label = align(clipLine(label, width-25), state+" "+age, width-2)
-	} else {
-		label = clipLine(label, max(1, width-lipgloss.Width(state)-3)) + " " + state
+	if lipgloss.Width(label) > labelWidth {
+		label = fmt.Sprintf("#%d  %s", pr.Number, safeText(pr.Repository))
 	}
-	first := marker + label
-	second := marker + clipLine(safeText(pr.Title), width-2)
-	third := marker + clipLine("@"+safeText(pr.User.Login)+"  ·  updated "+relativeTime(pr.UpdatedAt), width-2)
+	first := marker + align(clipLine(label, labelWidth), state, width-2)
+	titleMarker := marker
 	if selected {
-		row := []string{first, second, third}
-		for i := range row {
-			row[i] = "  " + selectedStyle.Width(width).Render(row[i])
+		titleMarker = "▸ "
+	}
+	second := titleMarker + clipLine(safeText(pr.Title), max(1, width-2))
+	third := marker + clipLine("@"+safeText(pr.User.Login)+"  ·  updated "+relativeTime(pr.UpdatedAt), max(1, width-2))
+	if selected {
+		return []string{
+			"  " + selectedStyle.Width(width).Render(first),
+			"  " + selectedStyle.Bold(true).Width(width).Render(second),
+			"  " + selectedStyle.Foreground(lipgloss.Color("#D0D7E7")).Width(width).Render(third),
 		}
-		return row
 	}
 	return []string{"  " + first, "  " + textStyle.Bold(true).Render(second), "  " + mutedStyle.Render(third)}
 }
@@ -955,7 +958,7 @@ func (m model) footer(width int) string {
 		case m.mergeInProgress:
 			help = "Merge in progress…   q quit"
 		case m.mergeDialog == chooseMergeMethod:
-			help = "←/→ choose method   enter continue   esc cancel"
+			help = "↑/↓ choose method   enter continue   esc cancel"
 		case m.mergeDialog == confirmMerge:
 			help = "y confirm merge   esc cancel"
 		default:

@@ -259,9 +259,9 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "esc":
 			m.mergeDialog = noMergeDialog
-		case "left", "h":
+		case "up", "k":
 			m.mergeMethodIndex = (m.mergeMethodIndex + len(methods) - 1) % len(methods)
-		case "right", "l":
+		case "down", "j":
 			m.mergeMethodIndex = (m.mergeMethodIndex + 1) % len(methods)
 		case "enter":
 			if len(methods) > 0 {

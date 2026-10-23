@@ -31,7 +31,9 @@ Use left/right or `h`/`l` to switch sections; press `?` for the full shortcut
 list and `q` to quit. The Pull requests section loads open PRs from repositories
 you own, collaborate on, or can access through an organization. Navigate with
 up/down or `j`/`k`, search with `/`, and filter with `a` (all), `m` (authored by
-you), or `d` (drafts). Press `esc` to clear the active search and filter, or `r`
+you), or `d` (drafts). The selected PR is highlighted with its title and
+position in the list; draft status and the PR number stay visible in narrow
+terminals. Press `esc` to clear the active search and filter, or `r`
 to refresh. Press `enter` on a PR to open its details and automatically load all
 changed files and patches in the same continuous, scrollable view. Use up/down
 or `j`/`k` to scroll through the details and diff, `PgUp`/`PgDn` to move by a
@@ -42,8 +44,9 @@ code. On wide terminals, mergeability and all checks stay in a right-hand panel;
 press `tab` to focus it and use `j`/`k` or `PgUp`/`PgDn` to scroll its checks
 independently. On narrow terminals, checks appear below the diff. The merge
 action stays visible while scrolling. Press `m` to select an enabled merge
-method, then confirm with `y`. glance sends the merge through the GitHub API
-using the loaded head SHA and refreshes the dashboard afterwards.
+method with up/down or `j`/`k`, press `enter`, then confirm with `y`. glance
+sends the merge through the GitHub API using the loaded head SHA and refreshes
+the dashboard afterwards.
 The Issues section lists open issues across accessible repositories with labels
 and comment counts. Notifications shows read and unread threads and their
 reasons; use up/down or `j`/`k` to navigate either list. Overview shows counts
