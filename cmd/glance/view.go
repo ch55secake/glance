@@ -414,6 +414,13 @@ func (m model) pullRequestView(width int) []string {
 }
 
 func (m model) pullRequestDetailsView(width int) []string {
+	if m.detailLines != nil && m.detailLinesWidth == width {
+		return m.detailLines
+	}
+	return m.renderPullRequestDetails(width)
+}
+
+func (m model) renderPullRequestDetails(width int) []string {
 	if m.prDetails.Number == 0 {
 		var lines []string
 		if m.detailLoading {

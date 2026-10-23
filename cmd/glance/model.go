@@ -44,6 +44,8 @@ type model struct {
 	detailKey            string
 	detailError          string
 	detailScroll         int
+	detailLines          []string
+	detailLinesWidth     int
 	checksScroll         int
 	checksFocus          bool
 	prDetails            githubapi.PullRequestDetails
@@ -164,6 +166,7 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	m.mergeDialog = noMergeDialog
 	m.mergeInProgress = false
 	m.detailScroll = 0
+	m.detailLines = nil
 	m.checksScroll = 0
 	m.checksFocus = false
 	m.diffLoading = true
@@ -329,6 +332,7 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r", "R":
 		if !m.detailLoading && !m.diffLoading {
+			m.detailLines = nil
 			m.detailLoading = true
 			m.detailError = ""
 			m.diffLoading = true
@@ -337,6 +341,7 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.diffFiles = nil
 			m.detailScroll = 0
 			m.detailRequestID++
+			m.cacheDetailLines()
 			return m, tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
 		}
 	case "m", "M":
@@ -374,6 +379,20 @@ func (m model) maxDetailScroll() int {
 	return max(0, len(m.pullRequestDetailsView(left))-visible)
 }
 
+// cacheDetailLines does the expensive Markdown and syntax highlighting only
+// when the PR data or review-column width changes, never for a scroll key.
+func (m *model) cacheDetailLines() {
+	if !m.detailOpen {
+		return
+	}
+	width, _ := m.reviewWidths(max(1, m.width-4))
+	if m.detailLines != nil && m.detailLinesWidth == width {
+		return
+	}
+	m.detailLines = m.renderPullRequestDetails(width)
+	m.detailLinesWidth = width
+}
+
 func (m model) detailViewportHeight() int {
 	return max(1, m.height-6-len(m.mergeActionPanel(max(1, m.width-4))))
 }
@@ -383,6 +402,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.detailOpen {
+			m.cacheDetailLines()
+		}
 		if !m.hasReviewSidebar() {
 			m.checksFocus = false
 			m.checksScroll = 0
@@ -429,10 +451,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailLoading = false
 		if msg.err != nil {
 			m.detailError = safeText(msg.err.Error())
+			m.detailLines = nil
+			m.cacheDetailLines()
 			break
 		}
 		m.prDetails = msg.details
 		m.detailError = ""
+		m.detailLines = nil
+		m.cacheDetailLines()
 		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
 		m.checksScroll = min(m.checksScroll, m.maxChecksScroll())
 	case pullRequestFilesLoadedMsg:
@@ -443,11 +469,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.diffError = safeText(msg.err.Error())
 			m.diffLoaded = false
+			m.detailLines = nil
+			m.cacheDetailLines()
 			break
 		}
 		m.diffFiles = msg.files
 		m.diffLoaded = true
 		m.diffError = ""
+		m.detailLines = nil
+		m.cacheDetailLines()
 		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
 	case pullRequestMergedMsg:
 		if msg.requestID != m.mergeRequestID || msg.key != m.detailKey {
@@ -463,6 +493,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.requestID++
 		m.detailLoading = true
 		m.detailRequestID++
+		m.detailLines = nil
+		m.cacheDetailLines()
 		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
 	case tea.KeyMsg:
 		if m.searching {

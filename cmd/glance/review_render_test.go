@@ -13,6 +13,85 @@ import (
 	"github.com/muesli/termenv"
 )
 
+func TestReviewScrollReusesRenderedDiff(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 120, 24
+	m.detailOpen = true
+	m.detailKey = "octo/repo#42"
+	m.detailRequestID = 1
+	m.diffRequestID = 1
+	m.detailLoading = true
+	m.diffLoading = true
+	details := githubapi.PullRequestDetails{
+		PullRequest: githubapi.PullRequest{Number: 42, Repository: "octo/repo", State: "open"},
+		Body:        "# Details\n\n```go\nfunc main() {}\n```",
+	}
+	updated, _ := m.Update(pullRequestDetailsLoadedMsg{requestID: 1, key: m.detailKey, details: details})
+	m = updated.(model)
+	patch := "@@ -1 +1 @@\n" + strings.Repeat("+func main() {}\n", 900)
+	updated, _ = m.Update(pullRequestFilesLoadedMsg{requestID: 1, key: m.detailKey,
+		files: []githubapi.PullRequestFile{{Filename: "main.go", Patch: patch}}})
+	m = updated.(model)
+	if len(m.detailLines) < 900 {
+		t.Fatalf("rendered diff was not cached: %d lines", len(m.detailLines))
+	}
+	cached := &m.detailLines[0]
+	for i := range 30 {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+		m = updated.(model)
+		_ = m.View()
+		if &m.detailLines[0] != cached || &m.pullRequestDetailsView(m.detailLinesWidth)[0] != cached {
+			t.Fatalf("scroll %d re-rendered the review", i)
+		}
+	}
+	if m.detailScroll == 0 {
+		t.Fatal("paging did not scroll the cached diff")
+	}
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(model)
+	if &m.detailLines[0] != cached {
+		t.Fatal("height-only resize re-rendered the diff")
+	}
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	m = updated.(model)
+	if &m.detailLines[0] == cached || m.detailLinesWidth != 76 {
+		t.Fatal("width change did not reflow the diff")
+	}
+	updated, _ = m.Update(pullRequestFilesLoadedMsg{requestID: 1, key: m.detailKey,
+		files: []githubapi.PullRequestFile{{Filename: "main.go", Patch: "@@ -1 +1 @@\n+new"}}})
+	m = updated.(model)
+	if len(m.detailLines) >= 900 || !strings.Contains(strings.Join(m.detailLines, "\n"), "+new") {
+		t.Fatal("refreshed diff was not rendered into the cache")
+	}
+}
+
+func BenchmarkReviewScrollLargeDiff(b *testing.B) {
+	m := initialModel()
+	m.width, m.height = 120, 24
+	m.detailOpen = true
+	m.prDetails = githubapi.PullRequestDetails{PullRequest: githubapi.PullRequest{Number: 42, State: "open"}}
+	m.diffLoaded = true
+	m.diffFiles = []githubapi.PullRequestFile{{Filename: "main.go", Patch: "@@ -1 +1 @@\n" + strings.Repeat("+func main() {}\n", 900)}}
+	m.cacheDetailLines()
+	for _, cache := range []bool{true, false} {
+		name := "cached"
+		if !cache {
+			name = "uncached"
+		}
+		b.Run(name, func(b *testing.B) {
+			for b.Loop() {
+				copy := m
+				if !cache {
+					copy.detailLines = nil
+				}
+				updated, _ := copy.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+				copy = updated.(model)
+				_ = copy.View()
+			}
+		})
+	}
+}
+
 func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 	mergeable := false
 	m := initialModel()
