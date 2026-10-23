@@ -34,8 +34,11 @@ up/down or `j`/`k`, search with `/`, and filter with `a` (all), `m` (authored by
 you), or `d` (drafts). Press `esc` to clear the active search and filter, or `r`
 to refresh. Press `enter` on a PR to open its details and automatically load all
 changed files and patches in the same continuous, scrollable view. Use up/down
-or `j`/`k` to scroll through the details and diff, and `esc` to return to the
-same inbox position. Press `m` to select an enabled merge method, then
+or `j`/`k` to scroll through the details and diff, `PgUp`/`PgDn` to move by a
+screen, and `esc` to return to the same inbox position. Diff additions,
+deletions, hunks, and old/new line numbers are highlighted; long lines wrap.
+The merge action stays visible while scrolling. Press `m` to select an enabled
+merge method, then
 confirm with `y`. glance sends the merge through the GitHub API using the loaded
 head SHA and refreshes the dashboard afterwards.
 The Issues section lists open issues across accessible repositories with labels

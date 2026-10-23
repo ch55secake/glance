@@ -287,6 +287,10 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detailScroll = max(0, m.detailScroll-1)
 	case "down", "j":
 		m.detailScroll = min(m.maxDetailScroll(), m.detailScroll+1)
+	case "pgup", "ctrl+u":
+		m.detailScroll = max(0, m.detailScroll-m.detailViewportHeight())
+	case "pgdown", "ctrl+d":
+		m.detailScroll = min(m.maxDetailScroll(), m.detailScroll+m.detailViewportHeight())
 	case "home":
 		m.detailScroll = 0
 	case "end":
@@ -304,7 +308,6 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
 		}
 	case "m", "M":
-		m.detailScroll = 0
 		switch {
 		case m.detailLoading:
 			m.mergeError = "Wait for the pull request details to finish loading before merging."
@@ -334,8 +337,12 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) maxDetailScroll() int {
-	visible := max(1, m.height-6)
+	visible := m.detailViewportHeight()
 	return max(0, len(m.pullRequestDetailsView(max(1, m.width-4)))-visible)
+}
+
+func (m model) detailViewportHeight() int {
+	return max(1, m.height-6-len(m.mergeActionPanel(max(1, m.width-4))))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

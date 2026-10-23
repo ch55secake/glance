@@ -357,6 +357,111 @@ func TestOpeningPullRequestAutomaticallyLoadsContinuousDiff(t *testing.T) {
 	}
 }
 
+func TestDiffKeepsLineNumbersAndWrapsLongLines(t *testing.T) {
+	patch := "@@ -10,2 +20,3 @@ func Test()\n context\n-old value\n+new value\n+" + strings.Repeat("X", 84) + "END\n\\ No newline at end of file"
+	lines := renderPatch(patch, 30)
+	plain := strings.Join(lines, "\n")
+	for _, want := range []string{"@@ -10,2 +20,3 @@", "10   20 │  context", "11      │ -old value", "     21 │ +new value", "22 │ +", "END", "↳"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("rendered diff missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "…") {
+		t.Errorf("long diff line was truncated:\n%s", plain)
+	}
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > 32 {
+			t.Errorf("diff line exceeded 32 columns including indentation (%d): %q", width, line)
+		}
+	}
+}
+
+func TestDiffStatusColorsAndMonochromeFallback(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	colored := strings.Join(renderPatch("@@ -1 +1 @@\n-old\n+new", 40), "\n")
+	for _, code := range []string{"48;2;48;40;70", "48;2;69;43;54", "48;2;24;58;52"} {
+		if !strings.Contains(colored, code) {
+			t.Errorf("diff missing hunk/add/delete background %q: %s", code, colored)
+		}
+	}
+	lipgloss.SetColorProfile(termenv.Ascii)
+	plain := strings.Join(renderPatch("@@ -1 +1 @@\n-old\n+new", 40), "\n")
+	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "-old") || !strings.Contains(plain, "+new") {
+		t.Errorf("monochrome diff lost readable line indicators: %s", plain)
+	}
+}
+
+func TestDiffWrapsLongFilePaths(t *testing.T) {
+	m := initialModel()
+	m.diffLoaded = true
+	m.diffFiles = []githubapi.PullRequestFile{{
+		Filename:         "src/a/very/long/directory/renamed-file.go",
+		PreviousFilename: "src/old/file.go",
+		Status:           "renamed",
+		Patch:            "@@ -1 +1 @@\n-before\n+after",
+	}}
+	lines := m.pullRequestDiffLines(26)
+	text := strings.Join(lines, "\n")
+	if !strings.Contains(text, "src/old/file.go") || !strings.Contains(text, "src/a/") || !strings.Contains(text, "very/long/directory/rena") || !strings.Contains(text, "med-file.go") {
+		t.Errorf("renamed path was truncated: %s", text)
+	}
+	for _, line := range lines {
+		if lipgloss.Width(line) > 28 {
+			t.Errorf("file path exceeded terminal width: %q", line)
+		}
+	}
+}
+
+func TestMergeActionsStayVisibleWhileScrollingDiff(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 45, 18
+	m.loading = false
+	m.detailOpen = true
+	m.detailKey = "octo/project#42"
+	m.prDetails = githubapi.PullRequestDetails{
+		PullRequest:         githubapi.PullRequest{Number: 42, Repository: "octo/project", Title: "Review me", State: "open"},
+		Base:                githubapi.PullRequestBranch{Ref: "main"},
+		Head:                githubapi.PullRequestBranch{SHA: "abc123"},
+		AllowedMergeMethods: []githubapi.MergeMethod{githubapi.MergeCommit, githubapi.MergeSquash, githubapi.MergeRebase},
+	}
+	m.diffLoaded = true
+	m.diffFiles = []githubapi.PullRequestFile{{Filename: "src/file.go", Patch: "@@ -1 +1 @@\n" + strings.Repeat("+changed line\n", 35)}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = updated.(model)
+	if m.detailScroll == 0 || !strings.Contains(m.View(), "ACTIONS") || !strings.Contains(m.View(), "+changed line") {
+		t.Fatalf("scrolling lost actions or diff: %s", m.View())
+	}
+	end := m.detailScroll
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = updated.(model)
+	if m.detailScroll >= end || m.detailScroll < 0 {
+		t.Fatalf("page up did not move through the diff: %d → %d", end, m.detailScroll)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.detailScroll != end {
+		t.Fatalf("page down did not return to the end: %d, want %d", m.detailScroll, end)
+	}
+	updated, _ = m.Update(key("m"))
+	m = updated.(model)
+	chooser := m.View()
+	for _, want := range []string{"Choose merge method", "Merge commit", "Squash and merge", "Rebase and merge"} {
+		if !strings.Contains(chooser, want) {
+			t.Errorf("merge chooser missing %q: %s", want, chooser)
+		}
+	}
+	if m.detailScroll != end {
+		t.Errorf("opening merge chooser lost scroll position: got %d, want %d", m.detailScroll, end)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if view := m.View(); !strings.Contains(view, "Confirm merge") || !strings.Contains(view, "y confirm") {
+		t.Errorf("confirmation disappeared behind the diff: %s", view)
+	}
+}
+
 func TestPullRequestDiffLayoutsAndUnavailablePatches(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
 		for _, state := range []string{"normal", "binary", "error"} {
@@ -522,6 +627,20 @@ func TestPullRequestDetailsScrollAndLayout(t *testing.T) {
 				}
 				if lines := strings.Count(view, "\n") + 1; lines > size.height {
 					t.Errorf("view uses %d rows, terminal has %d", lines, size.height)
+				}
+				switch state {
+				case "choosing":
+					if !strings.Contains(view, "Choose merge method") || !strings.Contains(view, "Merge commit") {
+						t.Errorf("merge chooser is not visible at %dx%d: %s", size.width, size.height, view)
+					}
+				case "confirming":
+					if !strings.Contains(view, "Confirm merge") || !strings.Contains(view, "y confirm") {
+						t.Errorf("merge confirmation is not visible at %dx%d: %s", size.width, size.height, view)
+					}
+				case "merge-error":
+					if !strings.Contains(view, "Merge:") {
+						t.Errorf("merge error is not visible at %dx%d: %s", size.width, size.height, view)
+					}
 				}
 				if state == "normal" {
 					updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnd})

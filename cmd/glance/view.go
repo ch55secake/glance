@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -22,7 +24,13 @@ var (
 	activeStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#7252AB"))
 	openBadge     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#B8F3CF")).Background(lipgloss.Color("#214D42"))
 	draftBadge    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFE2A6")).Background(lipgloss.Color("#61492A"))
+	mergedBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#D6C5FF")).Background(lipgloss.Color("#443460"))
 	unreadBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#D6C5FF")).Background(lipgloss.Color("#443460"))
+	addLineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#B8F3CF")).Background(lipgloss.Color("#183A34"))
+	delLineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB6B9")).Background(lipgloss.Color("#452B36"))
+	hunkLineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A7FF")).Background(lipgloss.Color("#302946"))
+	fileLineStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F1F2F6")).Background(lipgloss.Color("#343C57"))
+	hunkHeader    = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 )
 
 // View renders a fixed-height dashboard; the PR window moves with the selection.
@@ -41,10 +49,11 @@ func (m model) View() string {
 		lines = append(lines, m.helpView(inner)...)
 	case m.detailOpen:
 		content := m.pullRequestDetailsView(inner)
-		visible := max(1, m.height-len(lines)-2)
+		visible := m.detailViewportHeight()
 		start := min(max(0, m.detailScroll), max(0, len(content)-visible))
 		end := min(len(content), start+visible)
 		lines = append(lines, content[start:end]...)
+		lines = append(lines, m.mergeActionPanel(inner)...)
 	case m.activeSection == 1:
 		lines = append(lines, m.pullRequestView(inner)...)
 	case m.activeSection == 0:
@@ -90,6 +99,15 @@ func (m model) header(width int) string {
 }
 
 func (m model) navigation(width int) string {
+	if m.detailOpen {
+		left := "← Pull requests  /  " + safeText(m.detailKey)
+		if width >= 55 {
+			total := len(m.pullRequestDetailsView(width))
+			progress := fmt.Sprintf("%d–%d / %d", min(m.detailScroll+1, total), min(m.detailScroll+m.detailViewportHeight(), total), total)
+			return "  " + alignStyled(left, progress, width, accentStyle, mutedStyle)
+		}
+		return "  " + accentStyle.Render(clipLine(left, width))
+	}
 	if width < 65 {
 		label := fmt.Sprintf("%d / %d  %s", m.activeSection+1, len(sections), sections[m.activeSection])
 		return "  " + activeStyle.Render(clipLine(label, width))
@@ -314,14 +332,14 @@ func (m model) helpView(width int) []string {
 	}
 	if m.detailOpen {
 		shortcuts = []string{
-			"↑/↓ or j/k  Scroll PR details and diff", "Home / End   First / last line",
+			"↑/↓ or j/k  Scroll PR details and diff", "PgUp/PgDn    Scroll a screen", "Home / End   First / last line",
 			"m            Merge pull request", "r            Refresh details and diff",
 			"esc          Return to PR inbox", "?            Close help", "q            Quit",
 		}
 	}
 	if m.height < 19 {
 		if m.detailOpen {
-			shortcuts = []string{"↑/↓ or j/k scroll details and diff", "m merge   r refresh", "esc back   ? close   q quit"}
+			shortcuts = []string{"↑/↓ scroll   PgUp/PgDn page", "m merge   r refresh", "esc back   ? close   q quit"}
 		} else {
 			shortcuts = []string{"←/→ sections   ↑/↓ select", "enter details   m merge", "/ search   a/m/d filters", "r refresh   ? close   q quit"}
 		}
@@ -388,15 +406,17 @@ func (m model) pullRequestDetailsView(width int) []string {
 		return append(lines, m.pullRequestDiffLines(width)...)
 	}
 	details := m.prDetails
-	state := strings.ToUpper(details.State)
+	state := openBadge.Render(" ● OPEN ")
 	if details.Merged {
-		state = "MERGED"
+		state = mergedBadge.Render(" ● MERGED ")
 	} else if details.Draft {
-		state += " · DRAFT"
+		state = draftBadge.Render(" ◆ DRAFT ")
+	} else if details.State != "open" {
+		state = mutedStyle.Render(" " + strings.ToUpper(safeText(details.State)) + " ")
 	}
 	lines := []string{
 		"  " + accentStyle.Render(clipLine(fmt.Sprintf("%s#%d  ·  %s", safeText(details.Repository), details.Number, safeText(details.Title)), width)),
-		"  " + goodStyle.Render(clipLine(state, width)),
+		"  " + state,
 	}
 	if m.detailLoading {
 		lines = append(lines, "  "+warnStyle.Render("Refreshing pull request details…"))
@@ -404,34 +424,8 @@ func (m model) pullRequestDetailsView(width int) []string {
 	if m.detailError != "" {
 		lines = append(lines, "  "+errorStyle.Render(clipLine("Refresh failed: "+m.detailError, width)))
 	}
-	if m.mergeNotice != "" {
-		lines = append(lines, "  "+goodStyle.Render(clipLine(m.mergeNotice, width)))
-	}
-	if m.mergeError != "" {
-		lines = append(lines, "  "+errorStyle.Render(clipLine(m.mergeError, width)))
-	}
 	if m.prDetails.MergeMethodsError != "" {
 		lines = append(lines, "  "+warnStyle.Render(clipLine("Merge methods unavailable: "+safeText(m.prDetails.MergeMethodsError), width)))
-	}
-	if m.mergeDialog == chooseMergeMethod {
-		lines = append(lines, "", "  "+accentStyle.Render("Choose merge method"))
-		for i, method := range details.AllowedMergeMethods {
-			label := mergeMethodLabel(method)
-			if i == m.mergeMethodIndex {
-				lines = append(lines, "  "+activeStyle.Render(" "+label+" "))
-			} else {
-				lines = append(lines, "  "+mutedStyle.Render(label))
-			}
-		}
-		lines = append(lines, "  "+mutedStyle.Render(clipLine("←/→ choose · enter continue · esc cancel", width)))
-	}
-	if m.mergeDialog == confirmMerge {
-		lines = append(lines, "", "  "+warnStyle.Render("Confirm merge"),
-			"  "+clipLine(fmt.Sprintf("Merge %s#%d using %s?", details.Repository, details.Number, mergeMethodLabel(m.mergeMethod)), width),
-			"  "+errorStyle.Render(clipLine("This changes the repository. Press y to confirm or esc to cancel.", width)))
-	}
-	if m.mergeInProgress {
-		lines = append(lines, "  "+warnStyle.Render("Merging pull request…"))
 	}
 	lines = append(lines,
 		"  "+mutedStyle.Render(clipLine("Author: @"+safeText(details.User.Login), width)),
@@ -445,6 +439,18 @@ func (m model) pullRequestDetailsView(width int) []string {
 	} else {
 		lines = append(lines, "  "+warnStyle.Render(clipLine("Mergeability: blocked ("+safeText(details.MergeableState)+")", width)))
 	}
+	lines = append(lines, "", "  "+accentStyle.Render("DESCRIPTION"))
+	description := strings.TrimSpace(details.Body)
+	if description == "" {
+		lines = append(lines, "  "+mutedStyle.Render("(No description.)"))
+	} else {
+		wrapped := lipgloss.NewStyle().Width(max(1, width-2)).Render(safeMultiline(description))
+		for _, line := range strings.Split(wrapped, "\n") {
+			lines = append(lines, "  "+line)
+		}
+	}
+	lines = append(lines, m.pullRequestDiffLines(width)...)
+	lines = append(lines, "", "  "+accentStyle.Render("REVIEW ACTIVITY"))
 	lines = append(lines, "  "+accentStyle.Render("Requested reviewers"))
 	if len(details.RequestedReviewers) == 0 {
 		lines = append(lines, "  "+mutedStyle.Render("None"))
@@ -501,17 +507,57 @@ func (m model) pullRequestDetailsView(width int) []string {
 			lines = append(lines, "  "+style.Render(clipLine(safeText(check.Name)+": "+strings.ToUpper(safeText(status)), width)))
 		}
 	}
-	lines = append(lines, "  "+accentStyle.Render("Description"))
-	description := strings.TrimSpace(details.Body)
-	if description == "" {
-		lines = append(lines, "  "+mutedStyle.Render("(No description.)"))
-	} else {
-		wrapped := lipgloss.NewStyle().Width(max(1, width-2)).Render(safeMultiline(description))
-		for _, line := range strings.Split(wrapped, "\n") {
-			lines = append(lines, "  "+line)
-		}
+	return lines
+}
+
+// mergeActionPanel stays below the scrollable PR content so the next action and
+// any result remain visible even at the bottom of a long diff.
+func (m model) mergeActionPanel(width int) []string {
+	lines := []string{"  " + mutedStyle.Render(strings.Repeat("─", width))}
+	if m.mergeError != "" {
+		lines = append(lines, panelMessage("Merge: "+m.mergeError, width, errorStyle)...)
 	}
-	lines = append(lines, m.pullRequestDiffLines(width)...)
+	if m.mergeNotice != "" {
+		lines = append(lines, panelMessage(m.mergeNotice, width, goodStyle)...)
+	}
+	switch {
+	case m.mergeInProgress:
+		return append(lines, "  "+warnStyle.Render(clipLine("MERGING  ·  Waiting for GitHub…", width)))
+	case m.mergeDialog == chooseMergeMethod:
+		lines = append(lines, "  "+accentStyle.Render(clipLine("Choose merge method", width)))
+		for i, method := range m.prDetails.AllowedMergeMethods {
+			choice := fmt.Sprintf(" %d  %s ", i+1, mergeMethodLabel(method))
+			if i == m.mergeMethodIndex {
+				lines = append(lines, "  "+activeStyle.Render(clipLine(choice, width)))
+			} else {
+				lines = append(lines, "  "+mutedStyle.Render(clipLine(choice, width)))
+			}
+		}
+		return append(lines, "  "+mutedStyle.Render(clipLine("←/→ choose  ·  enter continue  ·  esc cancel", width)))
+	case m.mergeDialog == confirmMerge:
+		lines = append(lines,
+			"  "+warnStyle.Render(clipLine("Confirm merge  ·  "+mergeMethodLabel(m.mergeMethod), width)),
+			"  "+textStyle.Render(clipLine(safeText(m.detailKey)+"  →  "+safeText(m.prDetails.Base.Ref), width)),
+			"  "+mutedStyle.Render(clipLine("y confirm  ·  esc cancel", width)),
+		)
+		return lines
+	default:
+		return append(lines, "  "+accentStyle.Render(clipLine("ACTIONS  ·  m merge  ·  r refresh  ·  esc back", width)))
+	}
+}
+
+func panelMessage(message string, width int, style lipgloss.Style) []string {
+	parts := wrapDiffLine(safeText(message), width)
+	lines := make([]string, 0, min(4, len(parts)))
+	for i, part := range parts {
+		if i == 4 {
+			break
+		}
+		if i == 3 && len(parts) > 4 {
+			part = clipLine(part+"…", width)
+		}
+		lines = append(lines, "  "+style.Render(part))
+	}
 	return lines
 }
 
@@ -532,7 +578,16 @@ func (m model) pullRequestDiffLines(width int) []string {
 	if len(m.diffFiles) == 0 {
 		return append(lines, "  "+mutedStyle.Render("No changed files."))
 	}
-	lines = append(lines, "  "+mutedStyle.Render(fmt.Sprintf("%d files changed", len(m.diffFiles))))
+	additions, deletions := 0, 0
+	for _, file := range m.diffFiles {
+		additions += file.Additions
+		deletions += file.Deletions
+	}
+	fileLabel := "files"
+	if len(m.diffFiles) == 1 {
+		fileLabel = "file"
+	}
+	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d %s changed  ·  +%d −%d", len(m.diffFiles), fileLabel, additions, deletions), width)))
 	for i, file := range m.diffFiles {
 		if i > 0 {
 			lines = append(lines, "")
@@ -541,32 +596,85 @@ func (m model) pullRequestDiffLines(width int) []string {
 		if file.PreviousFilename != "" && file.PreviousFilename != file.Filename {
 			path = safeText(file.PreviousFilename) + " → " + path
 		}
-		lines = append(lines,
-			"  "+textStyle.Bold(true).Render(clipLine(path, width)),
-			"  "+mutedStyle.Render(clipLine(fmt.Sprintf("File %d/%d  ·  %s  ·  +%d −%d", i+1, len(m.diffFiles), safeText(file.Status), file.Additions, file.Deletions), width)),
-			"  "+mutedStyle.Render(strings.Repeat("─", width)),
-		)
+		for j, part := range wrapDiffLine(path, max(1, width-2)) {
+			prefix := "  "
+			if j > 0 {
+				prefix = "↳ "
+			}
+			lines = append(lines, "  "+fileLineStyle.Width(width).Render(prefix+part))
+		}
+		lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("File %d/%d  ·  %s  ·  +%d −%d", i+1, len(m.diffFiles), safeText(file.Status), file.Additions, file.Deletions), width)))
 		if file.Patch == "" {
-			lines = append(lines, "  "+mutedStyle.Render(clipLine("GitHub did not provide a patch for this file (it may be binary or too large).", width)))
+			lines = append(lines, "  "+mutedStyle.Render(clipLine("GitHub did not provide a patch (binary or too large).", width)))
 			continue
 		}
-		for _, patchLine := range strings.Split(strings.TrimSuffix(file.Patch, "\n"), "\n") {
-			clean := safeMultiline(patchLine)
-			style := textStyle
-			switch {
-			case strings.HasPrefix(clean, "+++") || strings.HasPrefix(clean, "---"):
-				style = mutedStyle
-			case strings.HasPrefix(clean, "+"):
-				style = goodStyle
-			case strings.HasPrefix(clean, "-"):
-				style = errorStyle
-			case strings.HasPrefix(clean, "@@"):
-				style = accentStyle
+		lines = append(lines, renderPatch(file.Patch, width)...)
+	}
+	return lines
+}
+
+// renderPatch keeps unified-diff line numbers intact while wrapping long code
+// lines instead of silently hiding the remainder offscreen.
+func renderPatch(patch string, width int) []string {
+	var lines []string
+	oldLine, newLine := 0, 0
+	for _, raw := range strings.Split(strings.TrimSuffix(patch, "\n"), "\n") {
+		line := safeMultiline(raw)
+		if match := hunkHeader.FindStringSubmatch(line); match != nil {
+			oldLine, _ = strconv.Atoi(match[1])
+			newLine, _ = strconv.Atoi(match[2])
+			for _, part := range wrapDiffLine(line, width) {
+				lines = append(lines, "  "+hunkLineStyle.Width(width).Render(part))
 			}
-			lines = append(lines, "  "+style.Render(clipLine(clean, width)))
+			continue
+		}
+		style := textStyle
+		oldNumber, newNumber := "", ""
+		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "\\"):
+			style = mutedStyle
+		case strings.HasPrefix(line, "+"):
+			newNumber = strconv.Itoa(newLine)
+			newLine++
+			style = addLineStyle
+		case strings.HasPrefix(line, "-"):
+			oldNumber = strconv.Itoa(oldLine)
+			oldLine++
+			style = delLineStyle
+		default:
+			oldNumber, newNumber = strconv.Itoa(oldLine), strconv.Itoa(newLine)
+			oldLine++
+			newLine++
+		}
+		gutter := fmt.Sprintf("%4s %4s │ ", oldNumber, newNumber)
+		available := max(1, width-lipgloss.Width(gutter))
+		for i, part := range wrapDiffLine(line, available) {
+			prefix := gutter
+			if i > 0 {
+				prefix = strings.Repeat(" ", lipgloss.Width(gutter)-2) + "↳ "
+			}
+			lines = append(lines, "  "+style.Width(width).Render(prefix+part))
 		}
 	}
 	return lines
+}
+
+func wrapDiffLine(line string, width int) []string {
+	width = max(1, width)
+	var parts []string
+	var current strings.Builder
+	used := 0
+	for _, char := range line {
+		charWidth := lipgloss.Width(string(char))
+		if used > 0 && used+charWidth > width {
+			parts = append(parts, current.String())
+			current.Reset()
+			used = 0
+		}
+		current.WriteRune(char)
+		used += charWidth
+	}
+	return append(parts, current.String())
 }
 
 func mergeMethodLabel(method githubapi.MergeMethod) string {
@@ -689,7 +797,7 @@ func (m model) footer(width int) string {
 		case m.mergeDialog == confirmMerge:
 			help = "y confirm merge   esc cancel"
 		default:
-			help = "esc back   ↑/↓/j/k scroll   m merge   r refresh"
+			help = "esc back   ↑/↓ scroll   PgUp/PgDn page   m merge"
 		}
 	} else {
 		switch m.activeSection {
