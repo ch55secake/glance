@@ -22,6 +22,7 @@ type model struct {
 	width                int
 	height               int
 	activeSection        int
+	overviewSelection    int
 	loading              bool
 	viewer               githubapi.User
 	apiError             string
@@ -155,7 +156,10 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	if m.selectedPR < 0 || m.selectedPR >= len(items) {
 		return nil
 	}
-	pr := items[m.selectedPR]
+	return m.openPullRequest(items[m.selectedPR])
+}
+
+func (m *model) openPullRequest(pr githubapi.PullRequest) tea.Cmd {
 	m.detailKey = fmt.Sprintf("%s#%d", pr.Repository, pr.Number)
 	m.detailOpen = true
 	m.detailLoading = true
@@ -419,6 +423,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		selectedPR := m.selectedKey()
+		selectedOverview := m.selectedOverviewKey()
 		selectedIssue := m.selectedIssueKey()
 		selectedNotification := m.selectedNotificationID()
 		m.loading = false
@@ -444,6 +449,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.restoreSelection(selectedPR)
 		m.restoreIssueSelection(selectedIssue)
 		m.restoreNotificationSelection(selectedNotification)
+		m.restoreOverviewSelection(selectedOverview)
 	case pullRequestDetailsLoadedMsg:
 		if msg.requestID != m.detailRequestID || msg.key != m.detailKey {
 			break
@@ -525,6 +531,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.detailOpen {
 			return m.updatePullRequestDetailKey(msg)
+		}
+		if m.activeSection == 0 {
+			items := m.overviewItems()
+			switch msg.String() {
+			case "up", "k":
+				m.overviewSelection = max(0, m.overviewSelection-1)
+				return m, nil
+			case "down", "j":
+				m.overviewSelection = min(max(0, len(items)-1), m.overviewSelection+1)
+				return m, nil
+			case "home":
+				m.overviewSelection = 0
+				return m, nil
+			case "end":
+				m.overviewSelection = max(0, len(items)-1)
+				return m, nil
+			case "enter":
+				if m.overviewSelection >= len(items) {
+					return m, nil
+				}
+				item := items[m.overviewSelection]
+				switch item.kind {
+				case overviewPR:
+					return m, m.openPullRequest(item.pr)
+				case overviewIssue:
+					m.activeSection, m.selectedIssue = 2, item.index
+				case overviewNotification:
+					m.activeSection, m.selectedNotification = 3, item.index
+				}
+				return m, nil
+			}
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":

@@ -151,72 +151,6 @@ func (m model) navigation(width int) string {
 	return "  " + strings.Join(tabs, " ")
 }
 
-func (m model) overviewView(width int) []string {
-	lines := []string{"  " + accentStyle.Render("OVERVIEW"), ""}
-	if m.loading && len(m.pullRequests) == 0 && len(m.issues) == 0 && len(m.notifications) == 0 {
-		return append(lines, "  "+mutedStyle.Render(clipLine("Welcome to glance  ·  Connecting to GitHub and loading pull requests...", width)))
-	}
-	if m.viewer.Login == "" {
-		detail := m.apiError
-		title := "Not connected"
-		if detail == "" {
-			detail = "Authenticate with `gh auth login` to connect to GitHub."
-		} else {
-			title = "Connection problem"
-		}
-		return append(lines, m.message(width, title, detail, "Press r to try again.")...)
-	}
-	mine, drafts, unread := 0, 0, 0
-	for _, pr := range m.pullRequests {
-		if strings.EqualFold(pr.User.Login, m.viewer.Login) {
-			mine++
-		}
-		if pr.Draft {
-			drafts++
-		}
-	}
-	for _, notification := range m.notifications {
-		if notification.Unread {
-			unread++
-		}
-	}
-	lines = append(lines, "  "+textStyle.Render(clipLine("Connected as @"+safeText(m.viewer.Login)+".", width)), "")
-	if width >= 100 {
-		cards := []string{
-			statCard("OPEN", len(m.pullRequests), goodStyle, "#214D42"),
-			statCard("YOURS", mine, accentStyle, "#443460"),
-			statCard("DRAFTS", drafts, warnStyle, "#61492A"),
-			statCard("ISSUES", len(m.issues), goodStyle, "#214D42"),
-			statCard("UNREAD", unread, accentStyle, "#443460"),
-		}
-		lines = append(lines, "  "+strings.Join(cards, "  "))
-	} else if width >= 58 {
-		cards := []string{
-			statCard("OPEN", len(m.pullRequests), goodStyle, "#214D42"),
-			statCard("YOURS", mine, accentStyle, "#443460"),
-			statCard("DRAFTS", drafts, warnStyle, "#61492A"),
-		}
-		lines = append(lines, "  "+strings.Join(cards, "  "), "  "+goodStyle.Render(fmt.Sprintf("%d issues", len(m.issues)))+"   "+accentStyle.Render(fmt.Sprintf("%d unread notifications", unread)))
-	} else {
-		lines = append(lines,
-			"  "+goodStyle.Render(fmt.Sprintf("%d open pull requests", len(m.pullRequests))),
-			"  "+accentStyle.Render(fmt.Sprintf("%d authored by you", mine)),
-			"  "+warnStyle.Render(fmt.Sprintf("%d drafts", drafts)),
-			"  "+goodStyle.Render(fmt.Sprintf("%d issues", len(m.issues))),
-			"  "+accentStyle.Render(fmt.Sprintf("%d unread notifications", unread)),
-		)
-	}
-	if m.hasErrors() {
-		lines = append(lines, "", "  "+errorStyle.Render("Some dashboard data could not be loaded:"))
-		for _, item := range []struct{ name, err string }{{"PRs", m.apiError}, {"Issues", m.issueError}, {"Notifications", m.notificationError}} {
-			if item.err != "" {
-				lines = append(lines, "  "+mutedStyle.Render(clipLine(item.name+": "+item.err, width)))
-			}
-		}
-	}
-	return append(lines, "", "  "+mutedStyle.Render(clipLine("Use → to browse pull requests, issues, and notifications.", width)))
-}
-
 func statCard(label string, count int, style lipgloss.Style, background lipgloss.Color) string {
 	return style.Bold(true).Background(background).Padding(0, 1).
 		Render(fmt.Sprintf("%d %s", count, label))
@@ -353,22 +287,29 @@ func (m model) hasErrors() bool {
 func (m model) helpView(width int) []string {
 	shortcuts := []string{
 		"←/→ or h/l  Switch sections", "↑/↓ or j/k  Select list item", "Home / End   First / last item",
-		"enter        Open PR details", "m            Select/confirm merge",
-		"/            Search PRs", "a / m / d    All / mine / drafts",
-		"esc          Clear search & filter", "r            Refresh", "?            Close help", "q            Quit",
+		"r            Refresh", "?            Close help", "q            Quit",
 	}
 	if m.detailOpen {
 		shortcuts = []string{
 			"↑/↓ or j/k  Scroll PR details and diff", "tab          Focus sidebar (wide terminals)", "PgUp/PgDn    Scroll a screen", "Home / End   First / last line",
 			"m            Merge pull request", "r            Refresh details and diff",
-			"esc          Return to PR inbox", "?            Close help", "q            Quit",
+			"esc          Return to previous section", "?            Close help", "q            Quit",
 		}
+	} else if m.activeSection == 0 {
+		shortcuts = []string{"←/→ or h/l  Switch sections", "↑/↓ or j/k  Select next-up item", "Home / End   First / last item", "enter        Open PR or jump to inbox", "r            Refresh", "?            Close help", "q            Quit"}
+	} else if m.activeSection == 1 {
+		shortcuts = append(shortcuts, "enter        Open PR details", "/            Search PRs", "a / m / d    All / mine / drafts", "esc          Clear search & filter")
 	}
 	if m.height < 19 {
 		if m.detailOpen {
 			shortcuts = []string{"↑/↓ scroll   PgUp/PgDn page", "m merge   r refresh", "esc back   ? close   q quit"}
+		} else if m.activeSection == 0 {
+			shortcuts = []string{"←/→ sections   ↑/↓ next up", "enter open or jump to inbox", "r refresh   ? close   q quit"}
 		} else {
-			shortcuts = []string{"←/→ sections   ↑/↓ select", "enter details   m merge", "/ search   a/m/d filters", "r refresh   ? close   q quit"}
+			shortcuts = []string{"←/→ sections   ↑/↓ select", "r refresh   ? close   q quit"}
+			if m.activeSection == 1 {
+				shortcuts = append(shortcuts, "enter details   / search   a/m/d filters")
+			}
 		}
 	}
 	lines := []string{"  " + accentStyle.Render("KEYBOARD SHORTCUTS"), ""}
@@ -1016,6 +957,11 @@ func (m model) footer(width int) string {
 		}
 	} else {
 		switch m.activeSection {
+		case 0:
+			help = "↑/↓ next up   enter open   ←/→ sections   r refresh"
+			if width < 55 {
+				help = "↑/↓ select   enter open   r refresh"
+			}
 		case 1:
 			help = "enter details   ↑/↓ select   a/m/d filter   / search"
 		case 2:

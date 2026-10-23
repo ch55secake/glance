@@ -28,7 +28,10 @@ make run
 ```
 
 Use left/right or `h`/`l` to switch sections; press `?` for the full shortcut
-list and `q` to quit. The Pull requests section loads open PRs from repositories
+list and `q` to quit. Overview prioritizes unread review requests, your PRs,
+other unread notifications, open PRs, and an issue. Use up/down or `j`/`k` to
+select a next-up item and `enter` to open its PR or jump to its inbox entry.
+The Pull requests section loads open PRs from repositories
 you own, collaborate on, or can access through an organization. Navigate with
 up/down or `j`/`k`, search with `/`, and filter with `a` (all), `m` (authored by
 you), or `d` (drafts). The selected PR is highlighted with its title and
@@ -50,8 +53,7 @@ with `y`. glance sends the merge through the GitHub API using the loaded head
 SHA and refreshes the dashboard afterwards.
 The Issues section lists open issues across accessible repositories with labels
 and comment counts. Notifications shows read and unread threads and their
-reasons; use up/down or `j`/`k` to navigate either list. Overview shows counts
-for PRs, issues, and unread notifications.
+reasons; use up/down or `j`/`k` to navigate either list.
 
 Build the executable with:
 
