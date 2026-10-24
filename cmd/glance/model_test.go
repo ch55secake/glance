@@ -1198,6 +1198,9 @@ func TestInboxFooterStaysAtBottomAsContentChanges(t *testing.T) {
 }
 
 func TestRoundedGitHubFilterBoxFitsAndKeepsCursorVisible(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
 	m := initialModel()
 	m.searching = true
 	m.searchDraft = "is:pr is:open author:@me repo:really-long-owner/really-long-repository"
@@ -1210,11 +1213,19 @@ func TestRoundedGitHubFilterBoxFitsAndKeepsCursorVisible(t *testing.T) {
 			if lipgloss.Width(line) > width {
 				t.Errorf("filter box exceeds %d columns: %q", width, line)
 			}
+			if strings.Contains(line, "48;2;") {
+				t.Errorf("filter box paints over the terminal background: %q", line)
+			}
 		}
 	}
 	m.searching = false
 	m.loading = false
 	m.pullRequests = []githubapi.PullRequest{{Repository: "team/repo", Number: 1}}
+	for _, line := range m.githubFilterBox(76) {
+		if strings.Contains(line, "48;2;") {
+			t.Errorf("inactive filter box paints over the terminal background: %q", line)
+		}
+	}
 	if view := m.View(); strings.Contains(view, "◈ PULL REQUESTS") || !strings.Contains(view, "1 found") {
 		t.Errorf("duplicate section heading or missing result count: %s", view)
 	}

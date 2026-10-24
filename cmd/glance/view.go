@@ -863,10 +863,8 @@ func (m model) githubFilterBox(width int) []string {
 		value = "…" + value
 	}
 	border := lipgloss.NewStyle().Foreground(lipgloss.Color("#606889"))
-	style := textStyle.Background(lipgloss.Color("#272C40"))
 	if m.searching {
 		border = accentStyle
-		style = style.Background(lipgloss.Color("#343C57"))
 	} else if m.apiError != "" {
 		border = errorStyle
 	}
@@ -878,7 +876,7 @@ func (m model) githubFilterBox(width int) []string {
 	bottom := "╰" + strings.Repeat("─", boxWidth-2) + "╯"
 	return []string{
 		border.Render(top),
-		border.Render("│") + style.Width(inputWidth).Render(" ⌕ "+value) + border.Render("│"),
+		border.Render("│") + textStyle.Width(inputWidth).Render(" ⌕ "+value) + border.Render("│"),
 		border.Render(bottom),
 	}
 }
