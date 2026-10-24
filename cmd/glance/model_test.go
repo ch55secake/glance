@@ -214,7 +214,7 @@ func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
 	}
 
 	view := m.View()
-	for _, want := range []string{"PULL REQUESTS", "2 open", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "DRAFT", "@hubot", "updated 2h ago"} {
+	for _, want := range []string{"PULL REQUESTS", "2 open", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "◆", "Updated 2h ago"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view %q does not contain %q", view, want)
 		}
@@ -232,14 +232,14 @@ func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 	for _, width := range []int{30, 45, 80, 120} {
 		m.width = width
 		rows := m.prRow(m.pullRequests[0], width-4, true)
-		if !strings.Contains(rows[1], "▸ ") || !strings.Contains(rows[1], "Improve the selected") {
+		if !strings.Contains(rows[0], "▸ ") || !strings.Contains(rows[0], "Improve the selected") {
 			t.Errorf("selected title not distinguished at width %d: %q", width, rows)
 		}
 		if !strings.Contains(rows[2], "@octocat") || !strings.Contains(rows[2], "updated") {
 			t.Errorf("selected author and timestamp missing at width %d: %q", width, rows)
 		}
 		draft := m.prRow(m.pullRequests[1], width-4, false)
-		if !strings.Contains(draft[0], "#7") || !strings.Contains(draft[0], "DRAFT") {
+		if !strings.Contains(draft[1], "#7") || !strings.Contains(draft[1], "DRAFT") {
 			t.Errorf("long repository hid the PR number or draft state at width %d: %q", width, draft)
 		}
 		for _, row := range append(rows, draft...) {
@@ -249,12 +249,12 @@ func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 		}
 	}
 	m.selectedPR = 1
-	if view := m.View(); !strings.Contains(view, "2/2 selected") {
+	if view := m.View(); !strings.Contains(view, "SELECTED  2 / 2") {
 		t.Errorf("list footer does not show selection: %s", view)
 	}
 	m.filter = draftPRs
 	m.selectedPR = 0
-	if view := m.View(); !strings.Contains(view, "1/2 shown") || !strings.Contains(view, "1/1 selected") {
+	if view := m.View(); !strings.Contains(view, "1/2 shown") || !strings.Contains(view, "SELECTED  1 / 1") {
 		t.Errorf("filtered list does not show its size and selection: %s", view)
 	}
 }
@@ -272,7 +272,7 @@ func TestPullRequestListSelectionVisibleWithoutColor(t *testing.T) {
 	}
 	m.selectedPR = 1
 	view := m.View()
-	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "2/2 selected") {
+	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "SELECTED  2 / 2") {
 		t.Errorf("monochrome list lost the selection marker or position: %s", view)
 	}
 }
@@ -786,7 +786,7 @@ func TestIssueAndNotificationScreens(t *testing.T) {
 		User: githubapi.User{Login: "octocat"}, Labels: []githubapi.Label{{Name: "documentation"}},
 	}}
 	issueView := m.View()
-	for _, text := range []string{"ISSUES", "1 open", "#12  octo/docs", "Document API behavior", "@octocat", "3 comments", "documentation"} {
+	for _, text := range []string{"ISSUES", "1 open", "octo/docs#12", "Document API behavior", "@octocat", "3 comments", "documentation"} {
 		if !strings.Contains(issueView, text) {
 			t.Errorf("issue view does not contain %q: %s", text, issueView)
 		}
@@ -1068,6 +1068,99 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 	}
 }
 
+func TestInboxLayoutUsesWhitespaceAndTitleFirst(t *testing.T) {
+	for _, width := range []int{30, 80, 120} {
+		m := initialModel()
+		m.width, m.height = width, 24
+		m.loading = false
+		m.viewer.Login = "octocat"
+		m.pullRequests = []githubapi.PullRequest{{Number: 42, Repository: "octo/project", Title: "Fix the layout", Draft: true}}
+		m.issues = []githubapi.Issue{{Number: 13, Repository: "octo/project", Title: "Fix an issue"}}
+		m.notifications = []githubapi.Notification{{Repository: githubapi.NotificationRepository{FullName: "octo/project"}, Subject: githubapi.NotificationSubject{Type: "Issue", Title: "Review this thread"}}}
+		for _, tc := range []struct {
+			section int
+			title   string
+			context string
+		}{
+			{0, "Fix the layout", "#42"},
+			{1, "Fix an issue", "#13"},
+			{2, "Review this thread", "octo/project"},
+		} {
+			m.activeSection = tc.section
+			lines := strings.Split(m.View(), "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "─") {
+					t.Errorf("section %d at width %d has a horizontal divider: %q", tc.section, width, line)
+				}
+			}
+			view := strings.Join(lines, "\n")
+			if title, context := strings.Index(view, tc.title), strings.Index(view, tc.context); title < 0 || context < title {
+				t.Errorf("section %d at width %d does not show title before context: %s", tc.section, width, view)
+			}
+		}
+	}
+}
+
+func TestInboxFooterStaysAtBottomAsContentChanges(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 16}, {80, 24}, {120, 36}} {
+		m := initialModel()
+		m.width, m.height = size.width, size.height
+		m.loading = false
+		m.pullRequests = []githubapi.PullRequest{{Number: 1, Repository: "team/repo", Title: "One PR"}}
+		for _, state := range []string{"list", "empty", "error", "help"} {
+			m.showHelp = state == "help"
+			m.apiError = ""
+			if state == "error" {
+				m.apiError = "Could not connect"
+			}
+			if state == "empty" {
+				m.pullRequests = nil
+			}
+			lines := strings.Split(m.View(), "\n")
+			if len(lines) != size.height || lines[len(lines)-1] != m.footer(size.width-4) {
+				t.Errorf("%dx%d %s footer moved or was lost: %q", size.width, size.height, state, lines)
+			}
+		}
+	}
+}
+
+func TestPRFiltersHaveSubtleActiveState(t *testing.T) {
+	m := initialModel()
+	for _, width := range []int{26, 76} {
+		for _, filter := range []prFilter{allPRs, minePRs, draftPRs} {
+			m.filter = filter
+			bar := m.filterBar(width)
+			if lipgloss.Width(bar) > width {
+				t.Errorf("filter bar exceeds %d columns: %q", width, bar)
+			}
+			if !strings.Contains(bar, []string{"a All", "m Mine", "d Drafts"}[filter]) {
+				t.Errorf("filter %d missing from %q", filter, bar)
+			}
+		}
+	}
+}
+
+func TestListSpacingKeepsSelectionVisible(t *testing.T) {
+	for _, height := range []int{16, 24, 36} {
+		m := initialModel()
+		m.width, m.height = 80, height
+		m.loading = false
+		for i := 0; i < 18; i++ {
+			m.pullRequests = append(m.pullRequests, githubapi.PullRequest{
+				Number: i + 1, Repository: "team/repo", Title: fmt.Sprintf("Item %d", i+1),
+			})
+		}
+		m.selectedPR = 17
+		view := m.View()
+		if !strings.Contains(view, "▸ Item 18") || len(strings.Split(view, "\n")) != height {
+			t.Errorf("%d-row list lost selection or footer: %s", height, view)
+		}
+		if height >= 24 && strings.Count(view, "\n\n") < 2 {
+			t.Errorf("%d-row list lacks breathing room between items: %s", height, view)
+		}
+	}
+}
+
 func TestIssueAndNotificationEmptyStates(t *testing.T) {
 	m := initialModel()
 	m.loading = false
@@ -1098,13 +1191,12 @@ func TestStatusColorsAndMonochromeFallback(t *testing.T) {
 	}
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	colored := m.View()
-	if !strings.Contains(colored, "48;2;97;73;42") ||
-		!strings.Contains(colored, "OPEN") || !strings.Contains(colored, "DRAFT") {
-		t.Fatalf("true-color view lacks color-coded PR states: %q", colored)
+	if !strings.Contains(colored, "48;2;32;77;65") || !strings.Contains(colored, "◆") {
+		t.Fatalf("true-color workspace lacks open state or draft indicator: %q", colored)
 	}
 	m.selectedPR = 1
-	if next := m.View(); !strings.Contains(next, "48;2;32;77;65") {
-		t.Fatalf("true-color view lacks OPEN badge: %q", next)
+	if next := m.View(); !strings.Contains(next, "48;2;97;73;42") {
+		t.Fatalf("true-color view lacks DRAFT badge: %q", next)
 	}
 	for _, width := range []int{30, 45, 80} {
 		m.width = width
@@ -1115,8 +1207,9 @@ func TestStatusColorsAndMonochromeFallback(t *testing.T) {
 		}
 	}
 	lipgloss.SetColorProfile(termenv.Ascii)
+	m.selectedPR = 0
 	plain := m.View()
-	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "OPEN") || !strings.Contains(plain, "DRAFT") {
+	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "OPEN") || !strings.Contains(plain, "◆") {
 		t.Fatalf("monochrome view lost readable statuses: %q", plain)
 	}
 }

@@ -42,7 +42,6 @@ func (m model) View() string {
 	inner := max(1, width-4)
 	lines := []string{
 		m.header(inner),
-		"  " + mutedStyle.Render(strings.Repeat("─", inner)),
 		m.navigation(inner),
 		"",
 	}
@@ -84,6 +83,10 @@ func (m model) View() string {
 	}
 
 	if !m.detailOpen || m.showHelp {
+		// Keep controls at the bottom as lists, empty states, and errors change size.
+		for len(lines) < m.height-2 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, "", m.footer(inner))
 	}
 	// Keep the view inside the terminal even on small screens or verbose API errors.
@@ -96,9 +99,6 @@ func (m model) View() string {
 
 func (m model) header(width int) string {
 	left := brandStyle.Render("◈ glance")
-	if width >= 55 {
-		left += mutedStyle.Render("  /  your GitHub workspace")
-	}
 	status := "CONNECTING"
 	style := warnStyle
 	if m.hasErrors() {
@@ -166,8 +166,7 @@ func (m model) issueView(width int) []string {
 	}
 	lines := []string{
 		"  " + alignStyled(heading, fmt.Sprintf("%d open", len(m.issues)), width, accentStyle, mutedStyle),
-		"  " + mutedStyle.Render(clipLine("Open issues across repositories with issues enabled", width)),
-		"  " + mutedStyle.Render(strings.Repeat("─", width)),
+		"",
 	}
 	if m.loading && len(m.issues) == 0 {
 		return append(lines, m.message(width, "Loading", "Loading issues across your repositories...", "This can take a moment for large accounts.")...)
@@ -178,10 +177,16 @@ func (m model) issueView(width int) []string {
 	if len(m.issues) == 0 {
 		return append(lines, m.message(width, "All clear", "No open issues found across repositories visible to your account.", "Press r to refresh.")...)
 	}
+	if width >= 76 {
+		return append(lines, m.issueWorkspace(width, len(lines))...)
+	}
 	visible := min(m.visibleListCount(), len(m.issues))
 	start := min(max(0, m.selectedIssue-visible/2), len(m.issues)-visible)
 	end := start + visible
 	for i := start; i < end; i++ {
+		if i > start && m.listRowSpacing() > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.issueRow(m.issues[i], width, i == m.selectedIssue)...)
 	}
 	return append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d of %d  ·  j/k move", start+1, end, len(m.issues)), width)))
@@ -197,8 +202,8 @@ func (m model) issueRow(issue githubapi.Issue, width int, selected bool) []strin
 		badge = " ● OPEN "
 	}
 	label := fmt.Sprintf("#%d  %s", issue.Number, safeText(issue.Repository))
-	first := marker + clipLine(label, max(1, width-lipgloss.Width(badge)-3)) + " " + badge
-	second := marker + clipLine(safeText(issue.Title), width-2)
+	first := marker + clipLine(safeText(issue.Title), width-2)
+	second := marker + clipLine(label, max(1, width-lipgloss.Width(badge)-3)) + " " + badge
 	metadata := "@" + safeText(issue.User.Login) + "  ·  " + fmt.Sprintf("%d comments", issue.Comments) + "  ·  updated " + relativeTime(issue.UpdatedAt)
 	if len(issue.Labels) > 0 {
 		labels := make([]string, 0, len(issue.Labels))
@@ -209,9 +214,9 @@ func (m model) issueRow(issue githubapi.Issue, width int, selected bool) []strin
 	}
 	third := marker + clipLine(metadata, width-2)
 	if selected {
-		return []string{"  " + selectedStyle.Width(width).Render(first), "  " + selectedStyle.Width(width).Render(second), "  " + selectedStyle.Width(width).Render(third)}
+		return []string{"  " + selectedStyle.Bold(true).Width(width).Render(first), "  " + selectedStyle.Width(width).Render(second), "  " + selectedStyle.Width(width).Render(third)}
 	}
-	return []string{"  " + first, "  " + textStyle.Bold(true).Render(second), "  " + mutedStyle.Render(third)}
+	return []string{"  " + textStyle.Bold(true).Render(first), "  " + second, "  " + mutedStyle.Render(third)}
 }
 
 func (m model) notificationView(width int) []string {
@@ -227,8 +232,7 @@ func (m model) notificationView(width int) []string {
 	}
 	lines := []string{
 		"  " + alignStyled(heading, fmt.Sprintf("%d unread  ·  %d total", unread, len(m.notifications)), width, accentStyle, mutedStyle),
-		"  " + mutedStyle.Render(clipLine("Threads from repositories visible to your account", width)),
-		"  " + mutedStyle.Render(strings.Repeat("─", width)),
+		"",
 	}
 	if m.loading && len(m.notifications) == 0 {
 		return append(lines, m.message(width, "Loading", "Loading GitHub notifications...", "This can take a moment.")...)
@@ -239,10 +243,16 @@ func (m model) notificationView(width int) []string {
 	if len(m.notifications) == 0 {
 		return append(lines, m.message(width, "You're all caught up", "No notifications were found.", "Press r to refresh.")...)
 	}
+	if width >= 76 {
+		return append(lines, m.notificationWorkspace(width, len(lines))...)
+	}
 	visible := min(m.visibleListCount(), len(m.notifications))
 	start := min(max(0, m.selectedNotification-visible/2), len(m.notifications)-visible)
 	end := start + visible
 	for i := start; i < end; i++ {
+		if i > start && m.listRowSpacing() > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.notificationRow(m.notifications[i], width, i == m.selectedNotification)...)
 	}
 	return append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d of %d  ·  j/k move", start+1, end, len(m.notifications)), width)))
@@ -264,13 +274,13 @@ func (m model) notificationRow(notification githubapi.Notification, width int, s
 		}
 	}
 	label := fmt.Sprintf("%s  ·  %s", safeText(notification.Repository.FullName), safeText(notification.Subject.Type))
-	first := marker + clipLine(label, max(1, width-lipgloss.Width(state)-3)) + " " + state
-	second := marker + clipLine(safeText(notification.Subject.Title), width-2)
+	first := marker + clipLine(safeText(notification.Subject.Title), width-2)
+	second := marker + clipLine(label, max(1, width-lipgloss.Width(state)-3)) + " " + state
 	third := marker + clipLine(safeText(notification.Reason)+"  ·  updated "+relativeTime(notification.UpdatedAt), width-2)
 	if selected {
-		return []string{"  " + selectedStyle.Width(width).Render(first), "  " + selectedStyle.Width(width).Render(second), "  " + selectedStyle.Width(width).Render(third)}
+		return []string{"  " + selectedStyle.Bold(true).Width(width).Render(first), "  " + selectedStyle.Width(width).Render(second), "  " + selectedStyle.Width(width).Render(third)}
 	}
-	return []string{"  " + first, "  " + textStyle.Bold(true).Render(second), "  " + mutedStyle.Render(third)}
+	return []string{"  " + textStyle.Bold(true).Render(first), "  " + second, "  " + mutedStyle.Render(third)}
 }
 
 func (m model) hasErrors() bool {
@@ -329,7 +339,7 @@ func (m model) pullRequestView(width int) []string {
 		}
 		lines = append(lines, "  "+accentStyle.Render(clipLine(search, width)))
 	}
-	lines = append(lines, "  "+mutedStyle.Render(strings.Repeat("─", width)))
+	lines = append(lines, "")
 	if m.loading && len(m.pullRequests) == 0 {
 		return append(lines, m.message(width, "Loading", "Loading open pull requests across your repositories...", "This can take a moment for large accounts.")...)
 	}
@@ -342,12 +352,18 @@ func (m model) pullRequestView(width int) []string {
 	if len(items) == 0 {
 		return append(lines, m.message(width, "No matches", "No matching pull requests.", "Press esc to clear filters.")...)
 	}
+	if width >= 76 {
+		return append(lines, m.pullRequestWorkspace(items, width, len(lines))...)
+	}
 
 	visible := min(m.visibleListCount(), len(items))
 	start := max(0, m.selectedPR-visible/2)
 	start = min(start, len(items)-visible)
 	end := start + visible
 	for i := start; i < end; i++ {
+		if i > start && m.listRowSpacing() > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.prRow(items[i], width, i == m.selectedPR)...)
 	}
 	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d/%d selected  ·  showing %d–%d  ·  ↵ review  ·  / search", m.selectedPR+1, len(items), start+1, end), width)))
@@ -857,16 +873,27 @@ func (m model) filterBar(width int) string {
 	}
 	var parts []string
 	for _, choice := range choices {
-		label := fmt.Sprintf(" %s %s ", choice.key, choice.name)
+		label := fmt.Sprintf("%s %s", choice.key, choice.name)
 		if m.filter == choice.mode {
-			parts = append(parts, activeStyle.Render(label))
+			parts = append(parts, accentStyle.Underline(true).Render(label))
 		} else {
 			parts = append(parts, mutedStyle.Render(label))
 		}
 	}
-	bar := strings.Join(parts, " ")
+	bar := strings.Join(parts, "   ")
 	if lipgloss.Width(bar) > width {
-		bar = accentStyle.Render(clipLine("[a] All  [m] Mine  [d] Drafts", width))
+		parts = parts[:0]
+		for _, choice := range choices {
+			style := mutedStyle
+			if m.filter == choice.mode {
+				style = accentStyle.Underline(true)
+			}
+			parts = append(parts, style.Render(choice.key+" "+choice.name))
+		}
+		bar = strings.Join(parts, " ")
+	}
+	if lipgloss.Width(bar) > width {
+		return accentStyle.Render(clipLine("a/m/d filters", width))
 	}
 	return bar
 }
@@ -893,21 +920,21 @@ func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []strin
 	if lipgloss.Width(label) > labelWidth {
 		label = fmt.Sprintf("#%d  %s", pr.Number, safeText(pr.Repository))
 	}
-	first := marker + align(clipLine(label, labelWidth), state, width-2)
+	second := marker + align(clipLine(label, labelWidth), state, width-2)
 	titleMarker := marker
 	if selected {
 		titleMarker = "▸ "
 	}
-	second := titleMarker + clipLine(safeText(pr.Title), max(1, width-2))
+	first := titleMarker + clipLine(safeText(pr.Title), max(1, width-2))
 	third := marker + clipLine("@"+safeText(pr.User.Login)+"  ·  updated "+relativeTime(pr.UpdatedAt), max(1, width-2))
 	if selected {
 		return []string{
-			"  " + selectedStyle.Width(width).Render(first),
-			"  " + selectedStyle.Bold(true).Width(width).Render(second),
+			"  " + selectedStyle.Bold(true).Width(width).Render(first),
+			"  " + selectedStyle.Width(width).Render(second),
 			"  " + selectedStyle.Foreground(lipgloss.Color("#D0D7E7")).Width(width).Render(third),
 		}
 	}
-	return []string{"  " + first, "  " + textStyle.Bold(true).Render(second), "  " + mutedStyle.Render(third)}
+	return []string{"  " + textStyle.Bold(true).Render(first), "  " + second, "  " + mutedStyle.Render(third)}
 }
 
 func (m model) message(width int, title, detail, hint string) []string {
@@ -959,11 +986,18 @@ func (m model) footer(width int) string {
 }
 
 func (m model) visibleListCount() int {
-	reserved := 10 // header, navigation, toolbar, viewport footer, and help bar
+	reserved := 9 // header, navigation, section heading, toolbar, list position and help bar
 	if m.query != "" || m.searching {
 		reserved++
 	}
-	return max(1, (m.height-reserved)/3)
+	return max(1, (m.height-reserved+m.listRowSpacing())/(3+m.listRowSpacing()))
+}
+
+func (m model) listRowSpacing() int {
+	if m.height >= 24 {
+		return 1
+	}
+	return 0
 }
 
 // align places a left and a right label on a single line.

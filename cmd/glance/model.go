@@ -49,6 +49,11 @@ type model struct {
 	sidebarScroll        int
 	sidebarFocus         bool
 	prDetails            githubapi.PullRequestDetails
+	previewCache         map[string]githubapi.PullRequestDetails
+	previewErrors        map[string]string
+	previewPending       map[string]bool
+	previewOrder         []string
+	previewEpoch         int
 	diffLoading          bool
 	diffLoaded           bool
 	diffRequestID        int
@@ -394,7 +399,7 @@ func (m *model) cacheDetailLines() {
 }
 
 func (m model) detailViewportHeight() int {
-	return max(1, m.height-4-len(m.mergeActionPanel(max(1, m.width-4))))
+	return max(1, m.height-3-len(m.mergeActionPanel(max(1, m.width-4))))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -444,6 +449,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.restoreSelection(selectedPR)
 		m.restoreIssueSelection(selectedIssue)
 		m.restoreNotificationSelection(selectedNotification)
+	case previewReadyMsg:
+		if msg.epoch != m.previewEpoch || m.selectedKey() != msg.key || m.width < 80 || m.height < 20 || m.activeSection != 0 || m.detailOpen || m.showHelp || m.searching {
+			break
+		}
+		if len(m.previewPending) >= 2 || m.previewPending[msg.key] || m.previewErrors[msg.key] != "" {
+			break
+		}
+		if _, cached := m.previewCache[msg.key]; cached {
+			break
+		}
+		if m.previewPending == nil {
+			m.previewPending = make(map[string]bool)
+		}
+		m.previewPending[msg.key] = true
+		return m, m.loadPRPreview(msg.key, msg.epoch)
+	case previewLoadedMsg:
+		if msg.epoch != m.previewEpoch {
+			break
+		}
+		delete(m.previewPending, msg.key)
+		if msg.err != nil {
+			if m.previewErrors == nil {
+				m.previewErrors = make(map[string]string)
+			}
+			m.previewErrors[msg.key] = safeText(msg.err.Error())
+			break
+		}
+		m.storePRPreview(msg.key, msg.details)
 	case pullRequestDetailsLoadedMsg:
 		if msg.requestID != m.detailRequestID || msg.key != m.detailKey {
 			break
@@ -456,6 +489,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.prDetails = msg.details
+		m.storePRPreview(msg.key, msg.details)
 		m.detailError = ""
 		m.detailLines = nil
 		m.cacheDetailLines()
@@ -489,6 +523,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.mergeNotice = "Merged successfully using " + strings.ToLower(string(m.mergeMethod)) + "."
+		m.clearPRPreviews()
 		m.loading = true
 		m.requestID++
 		m.detailLoading = true
@@ -512,7 +547,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedPR = 0
 				}
 			}
-			return m, nil
+			return m, m.schedulePRPreview()
 		}
 		if m.showHelp {
 			if msg.String() == "?" || msg.String() == "esc" || msg.String() == "enter" {
@@ -521,10 +556,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.String() == "q" || msg.String() == "ctrl+c" {
 				return m, tea.Quit
 			}
-			return m, nil
+			return m, m.schedulePRPreview()
 		}
 		if m.detailOpen {
-			return m.updatePullRequestDetailKey(msg)
+			updated, cmd := m.updatePullRequestDetailKey(msg)
+			if !m.detailOpen && cmd == nil {
+				return m, m.schedulePRPreview()
+			}
+			return updated, cmd
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -573,6 +612,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.loading {
 				break
 			}
+			m.clearPRPreviews()
 			m.loading = true
 			m.apiError = ""
 			m.issueError = ""
@@ -582,7 +622,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	return m, m.schedulePRPreview()
 }
 
 func (m model) filteredPRs() []githubapi.PullRequest {

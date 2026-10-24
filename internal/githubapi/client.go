@@ -135,6 +135,7 @@ type repositoryMergeSettings struct {
 type Issue struct {
 	Number     int       `json:"number"`
 	Title      string    `json:"title"`
+	Body       string    `json:"body"`
 	State      string    `json:"state"`
 	HTMLURL    string    `json:"html_url"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -464,6 +465,15 @@ func (c *Client) ListPullRequestFiles(ctx context.Context, owner, repository str
 // Detail, review, and check requests are kept separate so a missing check or
 // review permission doesn't prevent the main PR content from being shown.
 func (c *Client) GetPullRequestDetails(ctx context.Context, owner, repository string, number int) (PullRequestDetails, error) {
+	return c.getPullRequestDetails(ctx, owner, repository, number, true)
+}
+
+// GetPullRequestPreview skips merge settings, which are only needed in the full review.
+func (c *Client) GetPullRequestPreview(ctx context.Context, owner, repository string, number int) (PullRequestDetails, error) {
+	return c.getPullRequestDetails(ctx, owner, repository, number, false)
+}
+
+func (c *Client) getPullRequestDetails(ctx context.Context, owner, repository string, number int, mergeSettings bool) (PullRequestDetails, error) {
 	if !validPathSegment(owner) || !validPathSegment(repository) || number < 1 {
 		return PullRequestDetails{}, errors.New("GitHub owner, repository, and pull request number must be valid")
 	}
@@ -479,7 +489,7 @@ func (c *Client) GetPullRequestDetails(ctx context.Context, owner, repository st
 	details.Repository = owner + "/" + repository
 
 	var requests sync.WaitGroup
-	requests.Add(3)
+	requests.Add(2)
 	go func() {
 		defer requests.Done()
 		reviews, reviewsErr := c.listPullRequestReviews(ctx, owner, repository, number)
@@ -500,23 +510,26 @@ func (c *Client) GetPullRequestDetails(ctx context.Context, owner, repository st
 			details.ChecksError = checksErr.Error()
 		}
 	}()
-	go func() {
-		defer requests.Done()
-		settings, settingsErr := c.getRepositoryMergeSettings(ctx, owner, repository)
-		if settingsErr != nil {
-			details.MergeMethodsError = settingsErr.Error()
-			return
-		}
-		if settings.AllowMergeCommit {
-			details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeCommit)
-		}
-		if settings.AllowSquashMerge {
-			details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeSquash)
-		}
-		if settings.AllowRebaseMerge {
-			details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeRebase)
-		}
-	}()
+	if mergeSettings {
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			settings, settingsErr := c.getRepositoryMergeSettings(ctx, owner, repository)
+			if settingsErr != nil {
+				details.MergeMethodsError = settingsErr.Error()
+				return
+			}
+			if settings.AllowMergeCommit {
+				details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeCommit)
+			}
+			if settings.AllowSquashMerge {
+				details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeSquash)
+			}
+			if settings.AllowRebaseMerge {
+				details.AllowedMergeMethods = append(details.AllowedMergeMethods, MergeRebase)
+			}
+		}()
+	}
 	requests.Wait()
 	sort.Slice(details.Reviews, func(i, j int) bool {
 		return details.Reviews[i].SubmittedAt.After(details.Reviews[j].SubmittedAt)
