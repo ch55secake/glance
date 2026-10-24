@@ -214,7 +214,7 @@ func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
 	}
 
 	view := m.View()
-	for _, want := range []string{"PULL REQUESTS", "2 open", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "DRAFT", "@hubot", "updated 2h ago"} {
+	for _, want := range []string{"PULL REQUESTS", "2 open", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "◆", "Updated 2h ago"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view %q does not contain %q", view, want)
 		}
@@ -249,12 +249,12 @@ func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 		}
 	}
 	m.selectedPR = 1
-	if view := m.View(); !strings.Contains(view, "2/2 selected") {
+	if view := m.View(); !strings.Contains(view, "SELECTED  2 / 2") {
 		t.Errorf("list footer does not show selection: %s", view)
 	}
 	m.filter = draftPRs
 	m.selectedPR = 0
-	if view := m.View(); !strings.Contains(view, "1/2 shown") || !strings.Contains(view, "1/1 selected") {
+	if view := m.View(); !strings.Contains(view, "1/2 shown") || !strings.Contains(view, "SELECTED  1 / 1") {
 		t.Errorf("filtered list does not show its size and selection: %s", view)
 	}
 }
@@ -272,7 +272,7 @@ func TestPullRequestListSelectionVisibleWithoutColor(t *testing.T) {
 	}
 	m.selectedPR = 1
 	view := m.View()
-	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "2/2 selected") {
+	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "SELECTED  2 / 2") {
 		t.Errorf("monochrome list lost the selection marker or position: %s", view)
 	}
 }
@@ -786,7 +786,7 @@ func TestIssueAndNotificationScreens(t *testing.T) {
 		User: githubapi.User{Login: "octocat"}, Labels: []githubapi.Label{{Name: "documentation"}},
 	}}
 	issueView := m.View()
-	for _, text := range []string{"ISSUES", "1 open", "#12  octo/docs", "Document API behavior", "@octocat", "3 comments", "documentation"} {
+	for _, text := range []string{"ISSUES", "1 open", "octo/docs#12", "Document API behavior", "@octocat", "3 comments", "documentation"} {
 		if !strings.Contains(issueView, text) {
 			t.Errorf("issue view does not contain %q: %s", text, issueView)
 		}
@@ -1191,13 +1191,12 @@ func TestStatusColorsAndMonochromeFallback(t *testing.T) {
 	}
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	colored := m.View()
-	if !strings.Contains(colored, "48;2;97;73;42") ||
-		!strings.Contains(colored, "OPEN") || !strings.Contains(colored, "DRAFT") {
-		t.Fatalf("true-color view lacks color-coded PR states: %q", colored)
+	if !strings.Contains(colored, "48;2;32;77;65") || !strings.Contains(colored, "◆") {
+		t.Fatalf("true-color workspace lacks open state or draft indicator: %q", colored)
 	}
 	m.selectedPR = 1
-	if next := m.View(); !strings.Contains(next, "48;2;32;77;65") {
-		t.Fatalf("true-color view lacks OPEN badge: %q", next)
+	if next := m.View(); !strings.Contains(next, "48;2;97;73;42") {
+		t.Fatalf("true-color view lacks DRAFT badge: %q", next)
 	}
 	for _, width := range []int{30, 45, 80} {
 		m.width = width
@@ -1208,8 +1207,9 @@ func TestStatusColorsAndMonochromeFallback(t *testing.T) {
 		}
 	}
 	lipgloss.SetColorProfile(termenv.Ascii)
+	m.selectedPR = 0
 	plain := m.View()
-	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "OPEN") || !strings.Contains(plain, "DRAFT") {
+	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "OPEN") || !strings.Contains(plain, "◆") {
 		t.Fatalf("monochrome view lost readable statuses: %q", plain)
 	}
 }

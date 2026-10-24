@@ -177,6 +177,9 @@ func (m model) issueView(width int) []string {
 	if len(m.issues) == 0 {
 		return append(lines, m.message(width, "All clear", "No open issues found across repositories visible to your account.", "Press r to refresh.")...)
 	}
+	if width >= 76 {
+		return append(lines, m.issueWorkspace(width, len(lines))...)
+	}
 	visible := min(m.visibleListCount(), len(m.issues))
 	start := min(max(0, m.selectedIssue-visible/2), len(m.issues)-visible)
 	end := start + visible
@@ -239,6 +242,9 @@ func (m model) notificationView(width int) []string {
 	}
 	if len(m.notifications) == 0 {
 		return append(lines, m.message(width, "You're all caught up", "No notifications were found.", "Press r to refresh.")...)
+	}
+	if width >= 76 {
+		return append(lines, m.notificationWorkspace(width, len(lines))...)
 	}
 	visible := min(m.visibleListCount(), len(m.notifications))
 	start := min(max(0, m.selectedNotification-visible/2), len(m.notifications)-visible)
@@ -345,6 +351,9 @@ func (m model) pullRequestView(width int) []string {
 	}
 	if len(items) == 0 {
 		return append(lines, m.message(width, "No matches", "No matching pull requests.", "Press esc to clear filters.")...)
+	}
+	if width >= 76 {
+		return append(lines, m.pullRequestWorkspace(items, width, len(lines))...)
 	}
 
 	visible := min(m.visibleListCount(), len(items))
