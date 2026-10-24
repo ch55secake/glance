@@ -182,3 +182,21 @@ func TestPRPreviewCacheBoundedAndErrorsDoNotRetryUntilRefresh(t *testing.T) {
 		t.Fatal("refresh should allow retrying a failed preview")
 	}
 }
+
+func TestPRPreviewLimitsConcurrentRequests(t *testing.T) {
+	m := initialModel()
+	m.width, m.height, m.loading = 120, 36, false
+	m.pullRequests = []githubapi.PullRequest{{Repository: "team/repo", Number: 3}}
+	m.previewPending = map[string]bool{"team/repo#1": true, "team/repo#2": true}
+	if m.schedulePRPreview() != nil {
+		t.Fatal("scheduled a third concurrent preview")
+	}
+	updated, cmd := m.Update(previewReadyMsg{key: "team/repo#3", epoch: m.previewEpoch})
+	if cmd != nil || updated.(model).previewPending["team/repo#3"] {
+		t.Fatal("started a third concurrent preview")
+	}
+	_, cmd = updated.(model).Update(previewLoadedMsg{key: "team/repo#1", epoch: m.previewEpoch, err: errors.New("unavailable")})
+	if cmd == nil {
+		t.Fatal("finishing an old request should allow the current selection to load")
+	}
+}

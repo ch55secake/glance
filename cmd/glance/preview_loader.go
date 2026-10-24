@@ -28,7 +28,7 @@ func (m model) schedulePRPreview() tea.Cmd {
 		return nil
 	}
 	key := m.selectedKey()
-	if key == "" || m.previewPending[key] || m.previewErrors[key] != "" {
+	if key == "" || len(m.previewPending) >= 2 || m.previewPending[key] || m.previewErrors[key] != "" {
 		return nil
 	}
 	if _, ok := m.previewCache[key]; ok {

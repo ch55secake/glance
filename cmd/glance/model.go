@@ -453,7 +453,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.epoch != m.previewEpoch || m.selectedKey() != msg.key || m.width < 80 || m.height < 20 || m.activeSection != 0 || m.detailOpen || m.showHelp || m.searching {
 			break
 		}
-		if m.previewPending[msg.key] || m.previewErrors[msg.key] != "" {
+		if len(m.previewPending) >= 2 || m.previewPending[msg.key] || m.previewErrors[msg.key] != "" {
 			break
 		}
 		if _, cached := m.previewCache[msg.key]; cached {
