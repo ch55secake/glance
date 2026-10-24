@@ -45,6 +45,18 @@ func TestListPullRequestsUsesGhPagination(t *testing.T) {
 	}
 }
 
+func TestSearchPullRequestsUsesGitHubQueryAndRecoversRepository(t *testing.T) {
+	runner := &stubRunner{stdout: []byte(`[{"items":[{"number":42,"title":"My PR","state":"open","draft":true,"repository_url":"https://api.github.com/repos/octo/project","pull_request":{"url":"https://api.github.com/repos/octo/project/pulls/42"}},{"number":4,"title":"Not a PR","repository_url":"https://api.github.com/repos/octo/project"}]},{"items":[{"number":7,"title":"Another PR","repository_url":"https://api.github.com/repos/team/docs","pull_request":{"url":"https://api.github.com/repos/team/docs/pulls/7"}}]}]`)}
+	results, err := NewClientWithRunner(runner).SearchPullRequests(context.Background(), "is:open author:@me")
+	if err != nil || len(results) != 2 || !results[0].Draft || results[0].Repository != "octo/project" || results[1].Repository != "team/docs" {
+		t.Fatalf("SearchPullRequests() = %+v, %v", results, err)
+	}
+	want := [][]string{{"api", "--paginate", "--slurp", "-X", "GET", "-F", "q=is:pr is:open author:@me", "-F", "sort=updated", "-F", "order=desc", "-F", "per_page=100", "search/issues"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Errorf("gh calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestListPullRequestsRejectsInvalidPathSegments(t *testing.T) {
 	runner := &stubRunner{}
 	_, err := NewClientWithRunner(runner).ListPullRequests(context.Background(), "octo/other", "repo")
@@ -112,6 +124,23 @@ func TestGetPullRequestDetailsLoadsReviewStatusChecksAndMergeMethods(t *testing.
 	}
 	if details.ReviewsError != "" || details.ChecksError != "" || details.MergeMethodsError != "" {
 		t.Errorf("optional detail errors = reviews:%q checks:%q methods:%q", details.ReviewsError, details.ChecksError, details.MergeMethodsError)
+	}
+}
+
+func TestGetPullRequestPreviewOmitsMergeSettingsRequest(t *testing.T) {
+	runner := &routingRunner{responses: map[string][]byte{
+		"repos/octo/project/pulls/42":                  []byte(`{"number":42,"body":"Review context","head":{"sha":"abc123"}}`),
+		"repos/octo/project/pulls/42/reviews":          []byte(`[[{"state":"APPROVED"}]]`),
+		"repos/octo/project/commits/abc123/check-runs": []byte(`[{"check_runs":[{"name":"CI","conclusion":"success"}]}]`),
+	}}
+	details, err := NewClientWithRunner(runner).GetPullRequestPreview(context.Background(), "octo", "project", 42)
+	if err != nil || details.Number != 42 || details.Body != "Review context" || len(details.CheckRuns) != 1 || len(details.Reviews) != 1 {
+		t.Fatalf("preview details=%+v error=%v", details, err)
+	}
+	for _, call := range runner.calls {
+		if call[len(call)-1] == "repos/octo/project" {
+			t.Fatalf("preview unexpectedly fetched merge settings: %#v", runner.calls)
+		}
 	}
 }
 

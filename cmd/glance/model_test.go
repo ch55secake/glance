@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -58,7 +59,7 @@ func TestQuitKey(t *testing.T) {
 
 func TestViewShowsDashboardAndLoadingState(t *testing.T) {
 	view := initialModel().View()
-	for _, want := range []string{"glance", "Pull requests", "1 Pull requests", "Loading open pull requests"} {
+	for _, want := range []string{"glance", "Pull requests", "1 Pull requests", "Searching GitHub for pull requests"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view %q does not contain %q", view, want)
 		}
@@ -118,6 +119,7 @@ func TestInitLoadsViewerThroughGhAPI(t *testing.T) {
 	runner := &modelTestRunner{responses: map[string][]byte{
 		"user":          []byte(`{"login":"octocat"}`),
 		"user/repos":    []byte(`[]`),
+		"search/issues": []byte(`[{"items":[]}]`),
 		"notifications": []byte(`[]`),
 	}}
 	m := initialModel()
@@ -137,17 +139,22 @@ func TestInitLoadsViewerThroughGhAPI(t *testing.T) {
 	if len(runner.calls) != 4 || runner.calls[0][1] != "user" {
 		t.Fatalf("gh calls = %#v, want viewer and all three dashboard requests", runner.calls)
 	}
-	repoRequests, notificationRequests := 0, 0
+	repoRequests, notificationRequests, searchRequests := 0, 0, 0
 	for _, call := range runner.calls[1:] {
 		switch call[len(call)-1] {
 		case "user/repos":
 			repoRequests++
 		case "notifications":
 			notificationRequests++
+		case "search/issues":
+			searchRequests++
+			if !slices.Contains(call, "q="+defaultPRQuery) {
+				t.Errorf("default GitHub filter missing from %#v", call)
+			}
 		}
 	}
-	if repoRequests != 2 || notificationRequests != 1 {
-		t.Fatalf("dashboard data calls = %#v, want two repository-backed requests and notifications", runner.calls)
+	if repoRequests != 1 || notificationRequests != 1 || searchRequests != 1 {
+		t.Fatalf("dashboard data calls = %#v, want search, issues, and notifications", runner.calls)
 	}
 
 	updated, _ := m.Update(msg)
@@ -160,7 +167,7 @@ func TestInitLoadsIssuesAndNotifications(t *testing.T) {
 	runner := &modelTestRunner{responses: map[string][]byte{
 		"user":                   []byte(`{"login":"octocat"}`),
 		"user/repos":             []byte(`[[{"name":"repo","full_name":"octo/repo","owner":{"login":"octo"},"has_issues":true}]]`),
-		"repos/octo/repo/pulls":  []byte(`[[{"number":1,"title":"PR","updated_at":"2026-10-21T12:00:00Z","user":{"login":"hubot"}}]]`),
+		"search/issues":          []byte(`[{"items":[{"number":1,"title":"PR","updated_at":"2026-10-21T12:00:00Z","user":{"login":"octocat"},"repository_url":"https://api.github.com/repos/octo/repo","pull_request":{"url":"https://api.github.com/repos/octo/repo/pulls/1"}}]}]`),
 		"repos/octo/repo/issues": []byte(`[[{"number":2,"title":"Issue","state":"open","updated_at":"2026-10-21T13:00:00Z","user":{"login":"octocat"},"labels":[{"name":"bug"}],"comments":3}]]`),
 		"notifications":          []byte(`[[{"id":"thread-1","unread":true,"reason":"mention","updated_at":"2026-10-21T14:00:00Z","subject":{"title":"Review needed","type":"PullRequest"},"repository":{"full_name":"octo/repo"}}]]`),
 	}}
@@ -214,7 +221,7 @@ func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
 	}
 
 	view := m.View()
-	for _, want := range []string{"PULL REQUESTS", "2 open", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "DRAFT", "@hubot", "updated 2h ago"} {
+	for _, want := range []string{"2 found", "is:pr is:open author:@me", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "◆", "Updated 2h ago"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view %q does not contain %q", view, want)
 		}
@@ -232,14 +239,14 @@ func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 	for _, width := range []int{30, 45, 80, 120} {
 		m.width = width
 		rows := m.prRow(m.pullRequests[0], width-4, true)
-		if !strings.Contains(rows[1], "▸ ") || !strings.Contains(rows[1], "Improve the selected") {
+		if !strings.Contains(rows[0], "▸ ") || !strings.Contains(rows[0], "Improve the selected") {
 			t.Errorf("selected title not distinguished at width %d: %q", width, rows)
 		}
 		if !strings.Contains(rows[2], "@octocat") || !strings.Contains(rows[2], "updated") {
 			t.Errorf("selected author and timestamp missing at width %d: %q", width, rows)
 		}
 		draft := m.prRow(m.pullRequests[1], width-4, false)
-		if !strings.Contains(draft[0], "#7") || !strings.Contains(draft[0], "DRAFT") {
+		if !strings.Contains(draft[1], "#7") || !strings.Contains(draft[1], "DRAFT") {
 			t.Errorf("long repository hid the PR number or draft state at width %d: %q", width, draft)
 		}
 		for _, row := range append(rows, draft...) {
@@ -249,12 +256,13 @@ func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 		}
 	}
 	m.selectedPR = 1
-	if view := m.View(); !strings.Contains(view, "2/2 selected") {
+	if view := m.View(); !strings.Contains(view, "SELECTED  2 / 2") {
 		t.Errorf("list footer does not show selection: %s", view)
 	}
-	m.filter = draftPRs
+	m.query = "is:pr is:open draft:true"
+	m.pullRequests = m.pullRequests[1:]
 	m.selectedPR = 0
-	if view := m.View(); !strings.Contains(view, "1/2 shown") || !strings.Contains(view, "1/1 selected") {
+	if view := m.View(); !strings.Contains(view, "1 found") || !strings.Contains(view, "SELECTED  1 / 1") {
 		t.Errorf("filtered list does not show its size and selection: %s", view)
 	}
 }
@@ -272,7 +280,7 @@ func TestPullRequestListSelectionVisibleWithoutColor(t *testing.T) {
 	}
 	m.selectedPR = 1
 	view := m.View()
-	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "2/2 selected") {
+	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "SELECTED  2 / 2") {
 		t.Errorf("monochrome list lost the selection marker or position: %s", view)
 	}
 }
@@ -281,12 +289,12 @@ func TestPullRequestEmptyAndErrorStates(t *testing.T) {
 	m := initialModel()
 	m.activeSection = 0
 	m.loading = false
-	if view := m.View(); !strings.Contains(view, "No open pull requests found") {
+	if view := m.View(); !strings.Contains(view, "No pull requests match this GitHub filter") {
 		t.Errorf("empty view %q does not explain there are no PRs", view)
 	}
 
 	m.apiError = "GitHub API rate limit exceeded"
-	if view := m.View(); !strings.Contains(view, "GitHub API rate limit exceeded") || !strings.Contains(view, "Press r to try again") {
+	if view := m.View(); !strings.Contains(view, "GitHub API rate limit exceeded") || !strings.Contains(view, "press r to retry") {
 		t.Errorf("error view %q does not show error and refresh guidance", view)
 	}
 }
@@ -335,15 +343,14 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 	m.loading = false
 	m.activeSection = 0
 	m.viewer.Login = "octocat"
-	m.filter = minePRs
-	m.query = "useful"
+	m.query = "is:pr is:open author:@me useful"
 	m.pullRequests = []githubapi.PullRequest{{Number: 42, Title: "Useful change", Repository: "octo/project", User: githubapi.User{Login: "octocat"}}}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 	if cmd == nil || !m.detailOpen || m.detailKey != "octo/project#42" {
 		t.Fatalf("enter did not open selected PR: state=%+v command=%v", m, cmd != nil)
 	}
-	if m.searching || m.filter != minePRs || m.query != "useful" {
+	if m.searching || m.query != "is:pr is:open author:@me useful" {
 		t.Fatalf("opening details changed list filters/search: %+v", m)
 	}
 	result := cmd()
@@ -369,7 +376,7 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	back := updated.(model)
-	if back.detailOpen || back.selectedPR != 0 || back.filter != minePRs || back.query != "useful" {
+	if back.detailOpen || back.selectedPR != 0 || back.query != "is:pr is:open author:@me useful" {
 		t.Fatalf("returning from detail lost inbox state: %+v", back)
 	}
 }
@@ -786,7 +793,7 @@ func TestIssueAndNotificationScreens(t *testing.T) {
 		User: githubapi.User{Login: "octocat"}, Labels: []githubapi.Label{{Name: "documentation"}},
 	}}
 	issueView := m.View()
-	for _, text := range []string{"ISSUES", "1 open", "#12  octo/docs", "Document API behavior", "@octocat", "3 comments", "documentation"} {
+	for _, text := range []string{"ISSUES", "1 open", "octo/docs#12", "Document API behavior", "@octocat", "3 comments", "documentation"} {
 		if !strings.Contains(issueView, text) {
 			t.Errorf("issue view does not contain %q: %s", text, issueView)
 		}
@@ -871,51 +878,42 @@ func key(text string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}
 }
 
-func TestFiltersAndSearchAreScopedToPullRequests(t *testing.T) {
+func TestGitHubFilterIsScopedToPullRequestsAndSubmitted(t *testing.T) {
 	m := initialModel()
 	m.activeSection = 1
 	m.loading = false
-	m.viewer.Login = "octocat"
 	m.pullRequests = []githubapi.PullRequest{
-		{Repository: "team/alpha", Number: 1, Title: "Fix search", User: githubapi.User{Login: "octocat"}},
-		{Repository: "team/beta", Number: 2, Title: "Add tests", User: githubapi.User{Login: "hubot"}, Draft: true},
+		{Repository: "team/alpha", Number: 1, Title: "Fix search"},
+		{Repository: "team/beta", Number: 2, Title: "Add tests"},
 	}
-	updated, _ := m.Update(key("m"))
-	if updated.(model).filter != allPRs {
-		t.Fatal("filter changed outside PR section")
+	updated, _ := m.Update(key("/"))
+	if updated.(model).searching {
+		t.Fatal("GitHub filter opened outside PR section")
 	}
 	m.activeSection = 0
-	for _, tc := range []struct {
-		key        string
-		wantFilter prFilter
-		wantNumber int
-	}{
-		{"m", minePRs, 1}, {"d", draftPRs, 1}, {"a", allPRs, 2},
-	} {
-		updated, _ = m.Update(key(tc.key))
-		m = updated.(model)
-		if m.filter != tc.wantFilter || len(m.filteredPRs()) != tc.wantNumber {
-			t.Fatalf("filter %q: mode %v, results %d", tc.key, m.filter, len(m.filteredPRs()))
-		}
-	}
 	updated, _ = m.Update(key("/"))
 	m = updated.(model)
-	for _, char := range "BETA" {
+	if !m.searching || m.searchDraft != defaultPRQuery {
+		t.Fatalf("filter box did not start with default query: %+v", m)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m = updated.(model)
+	for _, char := range "is:open repo:team/beta" {
 		updated, _ = m.Update(key(string(char)))
 		m = updated.(model)
 	}
-	if !m.searching || len(m.filteredPRs()) != 1 || m.filteredPRs()[0].Number != 2 {
-		t.Fatalf("search query %q matched %+v", m.query, m.filteredPRs())
+	if !m.searching || m.query != defaultPRQuery || len(m.pullRequests) != 2 {
+		t.Fatal("editing the filter changed results before submission")
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	if m.searching || m.query != "BETA" {
-		t.Fatalf("enter lost search query: %+v", m)
+	if cmd == nil || m.searching || !m.prLoading || m.query != "is:open repo:team/beta" {
+		t.Fatalf("filter submission did not start a GitHub search: %+v", m)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(pullRequestsSearchedMsg{requestID: m.prRequestID, pullRequests: []githubapi.PullRequest{{Repository: "team/beta", Number: 2}}})
 	m = updated.(model)
-	if m.query != "" || m.filter != allPRs || len(m.filteredPRs()) != 2 {
-		t.Fatalf("esc did not clear filters: %+v", m)
+	if m.prLoading || len(m.pullRequests) != 1 || m.pullRequests[0].Number != 2 || !strings.Contains(m.View(), "1 found") {
+		t.Fatalf("GitHub results were not applied: %+v", m)
 	}
 }
 
@@ -924,21 +922,92 @@ func TestSearchEditingAndNoResults(t *testing.T) {
 	m.activeSection = 0
 	m.loading = false
 	m.pullRequests = []githubapi.PullRequest{{Title: "Hello", Repository: "team/hello"}}
-	for _, message := range []tea.KeyMsg{key("/"), key("x"), key("界")} {
+	for _, message := range []tea.KeyMsg{key("/"), tea.KeyMsg{Type: tea.KeyCtrlU}, key("x"), key("界")} {
 		updated, _ := m.Update(message)
 		m = updated.(model)
 	}
-	if m.query != "x界" || !strings.Contains(m.View(), "No matching pull requests") {
-		t.Fatalf("search state = %q, view = %q", m.query, m.View())
+	if m.searchDraft != "x界" || m.query != defaultPRQuery || !strings.Contains(m.View(), "x界") {
+		t.Fatalf("search draft = %q, view = %q", m.searchDraft, m.View())
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	m = updated.(model)
-	if m.query != "x" {
-		t.Fatalf("backspace left %q, want x", m.query)
+	if m.searchDraft != "x" {
+		t.Fatalf("backspace left %q, want x", m.searchDraft)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if updated.(model).searching {
-		t.Fatal("esc did not exit search mode")
+	if updated.(model).searching || updated.(model).query != defaultPRQuery {
+		t.Fatal("esc did not cancel the filter edit")
+	}
+}
+
+func TestGitHubFilterIgnoresStaleResultsAndPreservesOtherInboxes(t *testing.T) {
+	m := initialModel()
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{{Number: 1, Repository: "team/old"}}
+	m.issues = []githubapi.Issue{{Number: 2, Repository: "team/issue"}}
+	m.notifications = []githubapi.Notification{{ID: "thread"}}
+	m.searching = true
+	m.searchDraft = "repo:team/new is:open"
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if m.prRequestID != 1 || !m.prLoading {
+		t.Fatalf("filter did not initiate PR search: %+v", m)
+	}
+	updated, _ = m.Update(dashboardLoadedMsg{requestID: m.requestID, prRequestID: 0,
+		pullRequests: []githubapi.PullRequest{{Number: 8, Repository: "team/stale"}},
+		issues:       []githubapi.Issue{{Number: 3, Repository: "team/fresh"}},
+	})
+	m = updated.(model)
+	if m.pullRequests[0].Number != 1 || m.issues[0].Number != 3 || len(m.notifications) != 0 {
+		t.Fatalf("old dashboard replaced PR search or failed to update other inboxes: %+v", m)
+	}
+	updated, _ = m.Update(pullRequestsSearchedMsg{requestID: 0, pullRequests: []githubapi.PullRequest{{Number: 9}}})
+	m = updated.(model)
+	if m.pullRequests[0].Number != 1 || !m.prLoading {
+		t.Fatal("stale GitHub filter result changed the PR inbox")
+	}
+	updated, _ = m.Update(pullRequestsSearchedMsg{requestID: 1, err: errors.New("invalid search qualifier")})
+	m = updated.(model)
+	if m.prLoading || !strings.Contains(m.apiError, "invalid search qualifier") || m.pullRequests[0].Number != 1 {
+		t.Fatal("search error did not keep previous PRs and show feedback")
+	}
+	updated, _ = m.Update(dashboardLoadedMsg{requestID: m.requestID, prRequestID: 0, pullRequests: []githubapi.PullRequest{{Number: 99}}})
+	m = updated.(model)
+	if m.pullRequests[0].Number != 1 || !strings.Contains(m.apiError, "invalid search qualifier") {
+		t.Fatal("old dashboard response cleared current PR search error")
+	}
+	updated, _ = m.Update(key("r"))
+	refreshed := updated.(model)
+	if refreshed.query != "repo:team/new is:open" || refreshed.prRequestID != 2 {
+		t.Fatalf("refresh lost the applied GitHub filter: %+v", refreshed)
+	}
+}
+
+func TestApplyingGitHubFilterFetchesPRsWithExistingAuth(t *testing.T) {
+	runner := &modelTestRunner{responses: map[string][]byte{
+		"search/issues": []byte(`[{"items":[{"number":12,"title":"Ready to review","repository_url":"https://api.github.com/repos/team/repo","pull_request":{"url":"https://api.github.com/repos/team/repo/pulls/12"}}]}]`),
+	}}
+	m := initialModel()
+	m.loading = false
+	m.client = githubapi.NewClientWithRunner(runner)
+	m.searching = true
+	m.searchDraft = "repo:team/repo is:open"
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("applying GitHub filter did not request results")
+	}
+	message := cmd()
+	result, ok := message.(pullRequestsSearchedMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("filter command returned %T: %+v", message, result)
+	}
+	updated, _ = updated.(model).Update(result)
+	m = updated.(model)
+	if len(m.pullRequests) != 1 || m.pullRequests[0].Repository != "team/repo" || m.prLoading {
+		t.Fatalf("GitHub filter results = %+v", m)
+	}
+	if len(runner.calls) != 1 || !slices.Contains(runner.calls[0], "q=is:pr repo:team/repo is:open") {
+		t.Fatalf("filter did not reach gh api: %#v", runner.calls)
 	}
 }
 
@@ -964,6 +1033,7 @@ func TestRefreshPreservesSelectionAndIgnoresStaleResponse(t *testing.T) {
 	}
 	updated, _ = m.Update(dashboardLoadedMsg{
 		requestID:     1,
+		prRequestID:   1,
 		pullRequests:  []githubapi.PullRequest{{Repository: "team/b", Number: 2}, {Repository: "team/a", Number: 1}},
 		issues:        []githubapi.Issue{{Repository: "team/b", Number: 4}, {Repository: "team/a", Number: 3}},
 		notifications: []githubapi.Notification{{ID: "thread-b"}, {ID: "thread-a"}},
@@ -1032,7 +1102,7 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 				case "search":
 					m.activeSection = 0
 					m.searching = true
-					m.query = "project"
+					m.searchDraft = "is:pr repo:company/project"
 				case "help":
 					m.showHelp = true
 				case "error":
@@ -1068,6 +1138,120 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 	}
 }
 
+func TestInboxLayoutUsesWhitespaceAndTitleFirst(t *testing.T) {
+	for _, width := range []int{30, 80, 120} {
+		m := initialModel()
+		m.width, m.height = width, 24
+		m.loading = false
+		m.viewer.Login = "octocat"
+		m.pullRequests = []githubapi.PullRequest{{Number: 42, Repository: "octo/project", Title: "Fix the layout", Draft: true}}
+		m.issues = []githubapi.Issue{{Number: 13, Repository: "octo/project", Title: "Fix an issue"}}
+		m.notifications = []githubapi.Notification{{Repository: githubapi.NotificationRepository{FullName: "octo/project"}, Subject: githubapi.NotificationSubject{Type: "Issue", Title: "Review this thread"}}}
+		for _, tc := range []struct {
+			section int
+			title   string
+			context string
+		}{
+			{0, "Fix the layout", "#42"},
+			{1, "Fix an issue", "#13"},
+			{2, "Review this thread", "octo/project"},
+		} {
+			m.activeSection = tc.section
+			lines := strings.Split(m.View(), "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "─") {
+					if tc.section == 0 && (strings.Contains(line, "╭") || strings.Contains(line, "╰")) && lipgloss.Width(line) <= min(width, 68)+2 {
+						continue
+					}
+					t.Errorf("section %d at width %d has a horizontal divider: %q", tc.section, width, line)
+				}
+			}
+			view := strings.Join(lines, "\n")
+			if title, context := strings.Index(view, tc.title), strings.Index(view, tc.context); title < 0 || context < title {
+				t.Errorf("section %d at width %d does not show title before context: %s", tc.section, width, view)
+			}
+		}
+	}
+}
+
+func TestInboxFooterStaysAtBottomAsContentChanges(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 16}, {80, 24}, {120, 36}} {
+		m := initialModel()
+		m.width, m.height = size.width, size.height
+		m.loading = false
+		m.pullRequests = []githubapi.PullRequest{{Number: 1, Repository: "team/repo", Title: "One PR"}}
+		for _, state := range []string{"list", "empty", "error", "help"} {
+			m.showHelp = state == "help"
+			m.apiError = ""
+			if state == "error" {
+				m.apiError = "Could not connect"
+			}
+			if state == "empty" {
+				m.pullRequests = nil
+			}
+			lines := strings.Split(m.View(), "\n")
+			if len(lines) != size.height || lines[len(lines)-1] != m.footer(size.width-4) {
+				t.Errorf("%dx%d %s footer moved or was lost: %q", size.width, size.height, state, lines)
+			}
+		}
+	}
+}
+
+func TestRoundedGitHubFilterBoxFitsAndKeepsCursorVisible(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	m := initialModel()
+	m.searching = true
+	m.searchDraft = "is:pr is:open author:@me repo:really-long-owner/really-long-repository"
+	for _, width := range []int{26, 76, 116} {
+		box := m.githubFilterBox(width)
+		if len(box) != 3 || !strings.Contains(box[0], "╭") || !strings.Contains(box[2], "╯") || !strings.Contains(box[1], "▌") {
+			t.Errorf("rounded filter box lost border or cursor at %d columns: %q", width, box)
+		}
+		for _, line := range box {
+			if lipgloss.Width(line) > width {
+				t.Errorf("filter box exceeds %d columns: %q", width, line)
+			}
+			if strings.Contains(line, "48;2;") {
+				t.Errorf("filter box paints over the terminal background: %q", line)
+			}
+		}
+	}
+	m.searching = false
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{{Repository: "team/repo", Number: 1}}
+	for _, line := range m.githubFilterBox(76) {
+		if strings.Contains(line, "48;2;") {
+			t.Errorf("inactive filter box paints over the terminal background: %q", line)
+		}
+	}
+	if view := m.View(); strings.Contains(view, "◈ PULL REQUESTS") || !strings.Contains(view, "1 found") {
+		t.Errorf("duplicate section heading or missing result count: %s", view)
+	}
+}
+
+func TestListSpacingKeepsSelectionVisible(t *testing.T) {
+	for _, height := range []int{16, 24, 36} {
+		m := initialModel()
+		m.width, m.height = 80, height
+		m.loading = false
+		for i := 0; i < 18; i++ {
+			m.pullRequests = append(m.pullRequests, githubapi.PullRequest{
+				Number: i + 1, Repository: "team/repo", Title: fmt.Sprintf("Item %d", i+1),
+			})
+		}
+		m.selectedPR = 17
+		view := m.View()
+		if !strings.Contains(view, "▸ Item 18") || len(strings.Split(view, "\n")) != height {
+			t.Errorf("%d-row list lost selection or footer: %s", height, view)
+		}
+		if height >= 24 && strings.Count(view, "\n\n") < 2 {
+			t.Errorf("%d-row list lacks breathing room between items: %s", height, view)
+		}
+	}
+}
+
 func TestIssueAndNotificationEmptyStates(t *testing.T) {
 	m := initialModel()
 	m.loading = false
@@ -1098,13 +1282,12 @@ func TestStatusColorsAndMonochromeFallback(t *testing.T) {
 	}
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	colored := m.View()
-	if !strings.Contains(colored, "48;2;97;73;42") ||
-		!strings.Contains(colored, "OPEN") || !strings.Contains(colored, "DRAFT") {
-		t.Fatalf("true-color view lacks color-coded PR states: %q", colored)
+	if !strings.Contains(colored, "48;2;32;77;65") || !strings.Contains(colored, "◆") {
+		t.Fatalf("true-color workspace lacks open state or draft indicator: %q", colored)
 	}
 	m.selectedPR = 1
-	if next := m.View(); !strings.Contains(next, "48;2;32;77;65") {
-		t.Fatalf("true-color view lacks OPEN badge: %q", next)
+	if next := m.View(); !strings.Contains(next, "48;2;97;73;42") {
+		t.Fatalf("true-color view lacks DRAFT badge: %q", next)
 	}
 	for _, width := range []int{30, 45, 80} {
 		m.width = width
@@ -1115,8 +1298,9 @@ func TestStatusColorsAndMonochromeFallback(t *testing.T) {
 		}
 	}
 	lipgloss.SetColorProfile(termenv.Ascii)
+	m.selectedPR = 0
 	plain := m.View()
-	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "OPEN") || !strings.Contains(plain, "DRAFT") {
+	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "OPEN") || !strings.Contains(plain, "◆") {
 		t.Fatalf("monochrome view lost readable statuses: %q", plain)
 	}
 }
