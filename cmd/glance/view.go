@@ -320,16 +320,10 @@ func (m model) helpView(width int) []string {
 
 func (m model) pullRequestView(width int) []string {
 	items := m.pullRequests
-	heading := "◈ PULL REQUESTS"
-	if (m.loading || m.prLoading) && len(m.pullRequests) > 0 {
-		heading += "  ↻ Refreshing"
+	lines := make([]string, 0, 3)
+	for _, line := range m.githubFilterBox(width) {
+		lines = append(lines, "  "+line)
 	}
-	count := fmt.Sprintf("%d found", len(items))
-	lines := []string{
-		"  " + align(accentStyle.Render(clipLine(heading, max(1, width-lipgloss.Width(count)-1))), mutedStyle.Render(count), width),
-		"  " + m.githubFilterInput(width),
-	}
-	lines = append(lines, "")
 	if (m.prLoading || m.loading && m.prRequestID == 0) && len(m.pullRequests) == 0 {
 		return append(lines, m.message(width, "Loading", "Searching GitHub for pull requests...", "This can take a moment.")...)
 	}
@@ -353,7 +347,7 @@ func (m model) pullRequestView(width int) []string {
 		}
 		lines = append(lines, m.prRow(items[i], width, i == m.selectedPR)...)
 	}
-	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d/%d selected  ·  showing %d–%d  ·  ↵ review  ·  / search", m.selectedPR+1, len(items), start+1, end), width)))
+	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d/%d selected  ·  showing %d–%d  ·  ↵ review  ·  / filter", m.selectedPR+1, len(items), start+1, end), width)))
 	return lines
 }
 
@@ -850,24 +844,43 @@ func safeMultiline(text string) string {
 	return safe.String()
 }
 
-func (m model) githubFilterInput(width int) string {
+func (m model) githubFilterBox(width int) []string {
 	value := m.query
 	if m.searching {
 		value = m.searchDraft + "▌"
 	}
-	inputWidth := max(1, width-3)
+	if width < 12 {
+		return []string{accentStyle.Render(clipLine("⌕ "+safeText(value), width))}
+	}
+	boxWidth := min(width, 68)
+	inputWidth := boxWidth - 2
 	value = safeText(value)
-	if lipgloss.Width(value) > inputWidth-2 {
-		for lipgloss.Width(value) > inputWidth-3 && len(value) > 0 {
+	available := inputWidth - lipgloss.Width(" ⌕ ") - 1
+	if lipgloss.Width(value) > available {
+		for lipgloss.Width(value) > available-1 && len(value) > 0 {
 			value = string([]rune(value)[1:])
 		}
 		value = "…" + value
 	}
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color("#F1F2F6")).Background(lipgloss.Color("#272C40"))
+	border := lipgloss.NewStyle().Foreground(lipgloss.Color("#606889"))
+	style := textStyle.Background(lipgloss.Color("#272C40"))
 	if m.searching {
+		border = accentStyle
 		style = style.Background(lipgloss.Color("#343C57"))
+	} else if m.apiError != "" {
+		border = errorStyle
 	}
-	return accentStyle.Render("⌕ ") + style.Width(inputWidth).Render(" "+value)
+	count := fmt.Sprintf("%d found", len(m.pullRequests))
+	if m.prLoading || m.loading {
+		count = "↻ " + count
+	}
+	top := "╭─ " + count + " " + strings.Repeat("─", max(0, boxWidth-lipgloss.Width(count)-5)) + "╮"
+	bottom := "╰" + strings.Repeat("─", boxWidth-2) + "╯"
+	return []string{
+		border.Render(top),
+		border.Render("│") + style.Width(inputWidth).Render(" ⌕ "+value) + border.Render("│"),
+		border.Render(bottom),
+	}
 }
 
 func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []string {

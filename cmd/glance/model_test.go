@@ -221,7 +221,7 @@ func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
 	}
 
 	view := m.View()
-	for _, want := range []string{"PULL REQUESTS", "2 found", "is:pr is:open author:@me", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "◆", "Updated 2h ago"} {
+	for _, want := range []string{"2 found", "is:pr is:open author:@me", "octo/project#42", "Add useful dashboard", "@octocat", "octo/other#7", "◆", "Updated 2h ago"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view %q does not contain %q", view, want)
 		}
@@ -1160,6 +1160,9 @@ func TestInboxLayoutUsesWhitespaceAndTitleFirst(t *testing.T) {
 			lines := strings.Split(m.View(), "\n")
 			for _, line := range lines {
 				if strings.Contains(line, "─") {
+					if tc.section == 0 && (strings.Contains(line, "╭") || strings.Contains(line, "╰")) && lipgloss.Width(line) <= min(width, 68)+2 {
+						continue
+					}
 					t.Errorf("section %d at width %d has a horizontal divider: %q", tc.section, width, line)
 				}
 			}
@@ -1194,15 +1197,26 @@ func TestInboxFooterStaysAtBottomAsContentChanges(t *testing.T) {
 	}
 }
 
-func TestGitHubFilterTextBoxFitsAndKeepsCursorVisible(t *testing.T) {
+func TestRoundedGitHubFilterBoxFitsAndKeepsCursorVisible(t *testing.T) {
 	m := initialModel()
 	m.searching = true
 	m.searchDraft = "is:pr is:open author:@me repo:really-long-owner/really-long-repository"
 	for _, width := range []int{26, 76, 116} {
-		bar := m.githubFilterInput(width)
-		if lipgloss.Width(bar) > width || !strings.Contains(bar, "▌") {
-			t.Errorf("filter input exceeds %d columns or hides cursor: %q", width, bar)
+		box := m.githubFilterBox(width)
+		if len(box) != 3 || !strings.Contains(box[0], "╭") || !strings.Contains(box[2], "╯") || !strings.Contains(box[1], "▌") {
+			t.Errorf("rounded filter box lost border or cursor at %d columns: %q", width, box)
 		}
+		for _, line := range box {
+			if lipgloss.Width(line) > width {
+				t.Errorf("filter box exceeds %d columns: %q", width, line)
+			}
+		}
+	}
+	m.searching = false
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{{Repository: "team/repo", Number: 1}}
+	if view := m.View(); strings.Contains(view, "◈ PULL REQUESTS") || !strings.Contains(view, "1 found") {
+		t.Errorf("duplicate section heading or missing result count: %s", view)
 	}
 }
 
