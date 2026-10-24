@@ -282,6 +282,47 @@ func (c *Client) ListOpenPullRequests(ctx context.Context) ([]PullRequest, error
 	return pullRequests, nil
 }
 
+// SearchPullRequests runs GitHub's issue-search query for PRs. GitHub returns
+// PRs as issue results, so their repository is recovered from repository_url.
+func (c *Client) SearchPullRequests(ctx context.Context, query string) ([]PullRequest, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("GitHub pull request filter must not be empty")
+	}
+	if !strings.Contains(strings.ToLower(query), "is:pr") && !strings.Contains(strings.ToLower(query), "type:pr") {
+		query = "is:pr " + query
+	}
+	stdout, err := c.runPaginated(ctx, "search/issues", "q="+query, "sort=updated", "order=desc", fmt.Sprintf("per_page=%d", pageSize))
+	if err != nil {
+		return nil, err
+	}
+	var pages []struct {
+		Items []struct {
+			PullRequest
+			RepositoryURL string          `json:"repository_url"`
+			PRReference   json.RawMessage `json:"pull_request"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(stdout, &pages); err != nil {
+		return nil, fmt.Errorf("decode gh api pull request search response: %w", err)
+	}
+	results := make([]PullRequest, 0)
+	for _, page := range pages {
+		for _, item := range page.Items {
+			if len(item.PRReference) == 0 || bytes.Equal(bytes.TrimSpace(item.PRReference), []byte("null")) {
+				continue
+			}
+			_, path, ok := strings.Cut(item.RepositoryURL, "/repos/")
+			if !ok || len(strings.Split(path, "/")) != 2 {
+				return nil, fmt.Errorf("invalid repository URL in pull request search result")
+			}
+			item.Repository = path
+			results = append(results, item.PullRequest)
+		}
+	}
+	return results, nil
+}
+
 // ListOpenIssues returns open issues across all repositories visible to the user.
 // Pull requests are excluded because GitHub's issues endpoint includes them.
 func (c *Client) ListOpenIssues(ctx context.Context) ([]Issue, error) {

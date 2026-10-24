@@ -299,7 +299,7 @@ func (m model) helpView(width int) []string {
 			"esc          Return to previous section", "?            Close help", "q            Quit",
 		}
 	} else if m.activeSection == 0 {
-		shortcuts = append(shortcuts, "enter        Open PR details", "/            Search PRs", "a / m / d    All / mine / drafts", "esc          Clear search & filter")
+		shortcuts = append(shortcuts, "enter        Open PR details", "/            Edit GitHub PR filter", "enter        Apply filter while editing", "esc          Cancel filter edit")
 	}
 	if m.height < 19 {
 		if m.detailOpen {
@@ -307,7 +307,7 @@ func (m model) helpView(width int) []string {
 		} else {
 			shortcuts = []string{"←/→ sections   ↑/↓ select", "r refresh   ? close   q quit"}
 			if m.activeSection == 0 {
-				shortcuts = append(shortcuts, "enter details   / search   a/m/d filters")
+				shortcuts = append(shortcuts, "enter details   / edit GitHub filter")
 			}
 		}
 	}
@@ -319,38 +319,25 @@ func (m model) helpView(width int) []string {
 }
 
 func (m model) pullRequestView(width int) []string {
-	items := m.filteredPRs()
+	items := m.pullRequests
 	heading := "◈ PULL REQUESTS"
-	if m.loading && len(m.pullRequests) > 0 {
+	if (m.loading || m.prLoading) && len(m.pullRequests) > 0 {
 		heading += "  ↻ Refreshing"
 	}
-	count := fmt.Sprintf("%d open", len(m.pullRequests))
-	if len(items) != len(m.pullRequests) {
-		count = fmt.Sprintf("%d/%d shown", len(items), len(m.pullRequests))
-	}
+	count := fmt.Sprintf("%d found", len(items))
 	lines := []string{
 		"  " + align(accentStyle.Render(clipLine(heading, max(1, width-lipgloss.Width(count)-1))), mutedStyle.Render(count), width),
-		"  " + m.filterBar(width),
-	}
-	if m.query != "" || m.searching {
-		search := "/ " + safeText(m.query)
-		if m.searching {
-			search += "▌"
-		}
-		lines = append(lines, "  "+accentStyle.Render(clipLine(search, width)))
+		"  " + m.githubFilterInput(width),
 	}
 	lines = append(lines, "")
-	if m.loading && len(m.pullRequests) == 0 {
-		return append(lines, m.message(width, "Loading", "Loading open pull requests across your repositories...", "This can take a moment for large accounts.")...)
+	if (m.prLoading || m.loading && m.prRequestID == 0) && len(m.pullRequests) == 0 {
+		return append(lines, m.message(width, "Loading", "Searching GitHub for pull requests...", "This can take a moment.")...)
 	}
 	if m.apiError != "" {
-		return append(lines, m.message(width, "Could not load open pull requests", m.apiError, "Press r to try again.")...)
+		return append(lines, m.message(width, "Could not search pull requests", m.apiError, "Edit the filter with / or press r to retry.")...)
 	}
 	if len(m.pullRequests) == 0 {
-		return append(lines, m.message(width, "All clear", "No open pull requests found across repositories visible to your account.", "Press r to refresh.")...)
-	}
-	if len(items) == 0 {
-		return append(lines, m.message(width, "No matches", "No matching pull requests.", "Press esc to clear filters.")...)
+		return append(lines, m.message(width, "No matches", "No pull requests match this GitHub filter.", "Press / to change the filter.")...)
 	}
 	if width >= 76 {
 		return append(lines, m.pullRequestWorkspace(items, width, len(lines))...)
@@ -863,39 +850,24 @@ func safeMultiline(text string) string {
 	return safe.String()
 }
 
-func (m model) filterBar(width int) string {
-	choices := []struct {
-		name string
-		key  string
-		mode prFilter
-	}{
-		{"All", "a", allPRs}, {"Mine", "m", minePRs}, {"Drafts", "d", draftPRs},
+func (m model) githubFilterInput(width int) string {
+	value := m.query
+	if m.searching {
+		value = m.searchDraft + "▌"
 	}
-	var parts []string
-	for _, choice := range choices {
-		label := fmt.Sprintf("%s %s", choice.key, choice.name)
-		if m.filter == choice.mode {
-			parts = append(parts, accentStyle.Underline(true).Render(label))
-		} else {
-			parts = append(parts, mutedStyle.Render(label))
+	inputWidth := max(1, width-3)
+	value = safeText(value)
+	if lipgloss.Width(value) > inputWidth-2 {
+		for lipgloss.Width(value) > inputWidth-3 && len(value) > 0 {
+			value = string([]rune(value)[1:])
 		}
+		value = "…" + value
 	}
-	bar := strings.Join(parts, "   ")
-	if lipgloss.Width(bar) > width {
-		parts = parts[:0]
-		for _, choice := range choices {
-			style := mutedStyle
-			if m.filter == choice.mode {
-				style = accentStyle.Underline(true)
-			}
-			parts = append(parts, style.Render(choice.key+" "+choice.name))
-		}
-		bar = strings.Join(parts, " ")
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color("#F1F2F6")).Background(lipgloss.Color("#272C40"))
+	if m.searching {
+		style = style.Background(lipgloss.Color("#343C57"))
 	}
-	if lipgloss.Width(bar) > width {
-		return accentStyle.Render(clipLine("a/m/d filters", width))
-	}
-	return bar
+	return accentStyle.Render("⌕ ") + style.Width(inputWidth).Render(" "+value)
 }
 
 func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []string {
@@ -974,22 +946,19 @@ func (m model) footer(width int) string {
 	} else {
 		switch m.activeSection {
 		case 0:
-			help = "enter details   ↑/↓ select   a/m/d filter   / search"
+			help = "enter details   ↑/↓ select   / GitHub filter   r refresh"
 		case 1, 2:
 			help = "↑/↓ select   r refresh   ? help   q quit"
 		}
 	}
 	if m.searching {
-		help = "Type to search   enter/esc finish   backspace delete"
+		help = "GitHub filter   enter apply   esc cancel   ctrl+u clear"
 	}
 	return "  " + mutedStyle.Render(clipLine(help, width))
 }
 
 func (m model) visibleListCount() int {
 	reserved := 9 // header, navigation, section heading, toolbar, list position and help bar
-	if m.query != "" || m.searching {
-		reserved++
-	}
 	return max(1, (m.height-reserved+m.listRowSpacing())/(3+m.listRowSpacing()))
 }
 

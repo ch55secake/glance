@@ -28,18 +28,18 @@ make run
 ```
 
 Use left/right or `h`/`l` to switch sections; press `?` for the full shortcut
-list and `q` to quit. glance opens directly to Pull requests, which loads PRs
-from repositories you own, collaborate on, or can access through an
-organization. Navigate with up/down or `j`/`k`, search with `/`, and filter
-with `a` (all), `m` (authored by you), or `d` (drafts). On wider terminals,
+list and `q` to quit. glance opens directly to Pull requests, searching
+repositories visible to your GitHub account. The PR inbox defaults to the
+GitHub filter `is:pr is:open author:@me`. Press `/` to edit it using GitHub search qualifiers
+(for example, `repo:owner/name is:open`), `enter` to apply it, or `esc` to
+cancel. Press up/down or `j`/`k` to browse results. On wider terminals,
 each inbox has a compact selection rail beside a preview of the selected item;
 on narrow terminals, items appear in a single column. The selected PR's
 description (with line breaks), mergeability, checks, and review summary load
-after a short pause and are cached while browsing. Press `esc` to clear the
-active search and filter, or `r` to refresh. Press `enter` on a PR to open its
-details and automatically load all changed files and patches in the same continuous,
-scrollable view. Use up/down
-or `j`/`k` to scroll through the details and diff, `PgUp`/`PgDn` to move by a
+after a short pause and are cached while browsing. Press `r` to refresh the
+current filter. Press `enter` on a PR to open its details and automatically
+load all changed files and patches in the same continuous, scrollable view.
+Use up/down or `j`/`k` to scroll through the details and diff, `PgUp`/`PgDn` to move by a
 screen, and `esc` to return to the same inbox position. Diff additions,
 deletions, hunks, old/new line numbers, and recognized source code are highlighted;
 long lines wrap. PR descriptions render as Markdown, including lists and fenced

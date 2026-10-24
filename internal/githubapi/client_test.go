@@ -45,6 +45,18 @@ func TestListPullRequestsUsesGhPagination(t *testing.T) {
 	}
 }
 
+func TestSearchPullRequestsUsesGitHubQueryAndRecoversRepository(t *testing.T) {
+	runner := &stubRunner{stdout: []byte(`[{"items":[{"number":42,"title":"My PR","state":"open","draft":true,"repository_url":"https://api.github.com/repos/octo/project","pull_request":{"url":"https://api.github.com/repos/octo/project/pulls/42"}},{"number":4,"title":"Not a PR","repository_url":"https://api.github.com/repos/octo/project"}]},{"items":[{"number":7,"title":"Another PR","repository_url":"https://api.github.com/repos/team/docs","pull_request":{"url":"https://api.github.com/repos/team/docs/pulls/7"}}]}]`)}
+	results, err := NewClientWithRunner(runner).SearchPullRequests(context.Background(), "is:open author:@me")
+	if err != nil || len(results) != 2 || !results[0].Draft || results[0].Repository != "octo/project" || results[1].Repository != "team/docs" {
+		t.Fatalf("SearchPullRequests() = %+v, %v", results, err)
+	}
+	want := [][]string{{"api", "--paginate", "--slurp", "-X", "GET", "-F", "q=is:pr is:open author:@me", "-F", "sort=updated", "-F", "order=desc", "-F", "per_page=100", "search/issues"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Errorf("gh calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestListPullRequestsRejectsInvalidPathSegments(t *testing.T) {
 	runner := &stubRunner{}
 	_, err := NewClientWithRunner(runner).ListPullRequests(context.Background(), "octo/other", "repo")

@@ -24,7 +24,7 @@ type previewLoadedMsg struct {
 }
 
 func (m model) schedulePRPreview() tea.Cmd {
-	if m.loading || m.apiError != "" || m.width < 80 || m.height < 20 || m.activeSection != 0 || m.detailOpen || m.showHelp || m.searching {
+	if m.loading || m.prLoading || m.apiError != "" || m.width < 80 || m.height < 20 || m.activeSection != 0 || m.detailOpen || m.showHelp || m.searching {
 		return nil
 	}
 	key := m.selectedKey()
