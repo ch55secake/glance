@@ -394,7 +394,7 @@ func (m *model) cacheDetailLines() {
 }
 
 func (m model) detailViewportHeight() int {
-	return max(1, m.height-4-len(m.mergeActionPanel(max(1, m.width-4))))
+	return max(1, m.height-3-len(m.mergeActionPanel(max(1, m.width-4))))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

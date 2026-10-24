@@ -232,14 +232,14 @@ func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 	for _, width := range []int{30, 45, 80, 120} {
 		m.width = width
 		rows := m.prRow(m.pullRequests[0], width-4, true)
-		if !strings.Contains(rows[1], "▸ ") || !strings.Contains(rows[1], "Improve the selected") {
+		if !strings.Contains(rows[0], "▸ ") || !strings.Contains(rows[0], "Improve the selected") {
 			t.Errorf("selected title not distinguished at width %d: %q", width, rows)
 		}
 		if !strings.Contains(rows[2], "@octocat") || !strings.Contains(rows[2], "updated") {
 			t.Errorf("selected author and timestamp missing at width %d: %q", width, rows)
 		}
 		draft := m.prRow(m.pullRequests[1], width-4, false)
-		if !strings.Contains(draft[0], "#7") || !strings.Contains(draft[0], "DRAFT") {
+		if !strings.Contains(draft[1], "#7") || !strings.Contains(draft[1], "DRAFT") {
 			t.Errorf("long repository hid the PR number or draft state at width %d: %q", width, draft)
 		}
 		for _, row := range append(rows, draft...) {
@@ -1064,6 +1064,39 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 					t.Errorf("view uses %d rows, terminal has %d:\n%s", lines, size.height, view)
 				}
 			})
+		}
+	}
+}
+
+func TestInboxLayoutUsesWhitespaceAndTitleFirst(t *testing.T) {
+	for _, width := range []int{30, 80, 120} {
+		m := initialModel()
+		m.width, m.height = width, 24
+		m.loading = false
+		m.viewer.Login = "octocat"
+		m.pullRequests = []githubapi.PullRequest{{Number: 42, Repository: "octo/project", Title: "Fix the layout", Draft: true}}
+		m.issues = []githubapi.Issue{{Number: 13, Repository: "octo/project", Title: "Fix an issue"}}
+		m.notifications = []githubapi.Notification{{Repository: githubapi.NotificationRepository{FullName: "octo/project"}, Subject: githubapi.NotificationSubject{Type: "Issue", Title: "Review this thread"}}}
+		for _, tc := range []struct {
+			section int
+			title   string
+			context string
+		}{
+			{0, "Fix the layout", "#42"},
+			{1, "Fix an issue", "#13"},
+			{2, "Review this thread", "octo/project"},
+		} {
+			m.activeSection = tc.section
+			lines := strings.Split(m.View(), "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "─") {
+					t.Errorf("section %d at width %d has a horizontal divider: %q", tc.section, width, line)
+				}
+			}
+			view := strings.Join(lines, "\n")
+			if title, context := strings.Index(view, tc.title), strings.Index(view, tc.context); title < 0 || context < title {
+				t.Errorf("section %d at width %d does not show title before context: %s", tc.section, width, view)
+			}
 		}
 	}
 }
