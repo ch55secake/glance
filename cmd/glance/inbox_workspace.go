@@ -100,14 +100,14 @@ func (m model) prPreviewContext(key string, width, available int) []string {
 		}
 		lines = append(lines, accentStyle.Render("DESCRIPTION"))
 		body := previewExcerpt(details.Body)
-		if body == "" {
+		if strings.TrimSpace(body) == "" {
 			body = "No description provided."
 		}
 		bodyLimit := available
 		if available >= 12 && len(details.CheckRuns)+len(details.Reviews)+len(details.RequestedReviewers) > 0 {
 			bodyLimit -= min(6, len(details.CheckRuns)+len(details.Reviews)+len(details.RequestedReviewers)+2)
 		}
-		for _, part := range wrapPreviewWords(body, width) {
+		for _, part := range previewDescriptionLines(body, width) {
 			if len(lines) >= bodyLimit {
 				break
 			}
@@ -170,6 +170,19 @@ func wrapPreviewWords(text string, width int) []string {
 	return lines
 }
 
+// Preserve authored line breaks while wrapping each individual line to the pane.
+func previewDescriptionLines(body string, width int) []string {
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, wrapPreviewWords(line, width)...)
+	}
+	return lines
+}
+
 func (m model) issueWorkspace(width, headingRows int) []string {
 	selected := min(max(0, m.selectedIssue), len(m.issues)-1)
 	railTextWidth := min(38, max(26, width/3)) - 2
@@ -193,7 +206,7 @@ func (m model) issueWorkspace(width, headingRows int) []string {
 		}
 		if strings.TrimSpace(issue.Body) != "" {
 			lines = append(lines, "", accentStyle.Render("DESCRIPTION"))
-			for _, part := range wrapPreviewWords(previewExcerpt(issue.Body), w) {
+			for _, part := range previewDescriptionLines(previewExcerpt(issue.Body), w) {
 				lines = append(lines, mutedStyle.Render(part))
 			}
 		}
@@ -259,7 +272,7 @@ func previewTitle(title string, width int) []string {
 }
 
 func previewExcerpt(body string) string {
-	clean := []rune(strings.Join(strings.Fields(safeText(body)), " "))
+	clean := []rune(safeMultiline(strings.ReplaceAll(body, "\r\n", "\n")))
 	if len(clean) > 2000 {
 		return string(clean[:2000]) + "…"
 	}

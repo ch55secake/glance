@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -198,5 +199,50 @@ func TestPRPreviewLimitsConcurrentRequests(t *testing.T) {
 	_, cmd = updated.(model).Update(previewLoadedMsg{key: "team/repo#1", epoch: m.previewEpoch, err: errors.New("unavailable")})
 	if cmd == nil {
 		t.Fatal("finishing an old request should allow the current selection to load")
+	}
+}
+
+func TestPreviewDescriptionPreservesLineBreaksAndWraps(t *testing.T) {
+	body := "First line\r\nSecond line\n\nThird paragraph wraps across the pane.\nEnd\x1b[31m"
+	got := previewDescriptionLines(previewExcerpt(body), 14)
+	want := []string{"First line", "Second line", "", "Third", "paragraph", "wraps across", "the pane.", "End[31m"}
+	if !slices.Equal(got, want) {
+		t.Errorf("description lines = %#v, want %#v", got, want)
+	}
+	if !slices.Equal(previewDescriptionLines("One\nTwo\n\nThree", 40), []string{"One", "Two", "", "Three"}) {
+		t.Fatal("description lost authored line breaks")
+	}
+}
+
+func TestPRAndIssuePreviewsRenderAuthoredParagraphs(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 120, 36
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{{Repository: "team/repo", Number: 7, Title: "A PR"}}
+	m.storePRPreview("team/repo#7", githubapi.PullRequestDetails{
+		PullRequest: githubapi.PullRequest{Number: 7},
+		Body:        "First line\nSecond line\n\nThird paragraph",
+	})
+	checkParagraphRows(t, m.View())
+	m.activeSection = 1
+	m.issues = []githubapi.Issue{{Number: 8, Repository: "team/repo", Title: "An issue", Body: "First line\nSecond line\n\nThird paragraph"}}
+	checkParagraphRows(t, m.View())
+}
+
+func checkParagraphRows(t *testing.T, view string) {
+	t.Helper()
+	lines := strings.Split(view, "\n")
+	indexes := make([]int, 3)
+	for i, needle := range []string{"First line", "Second line", "Third paragraph"} {
+		indexes[i] = -1
+		for row, line := range lines {
+			if strings.Contains(line, needle) {
+				indexes[i] = row
+				break
+			}
+		}
+	}
+	if indexes[0] < 0 || indexes[1] != indexes[0]+1 || indexes[2] != indexes[1]+2 {
+		t.Errorf("preview collapsed line breaks or blank paragraph: rows %v\n%s", indexes, view)
 	}
 }
