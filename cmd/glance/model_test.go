@@ -58,14 +58,37 @@ func TestQuitKey(t *testing.T) {
 
 func TestViewShowsDashboardAndLoadingState(t *testing.T) {
 	view := initialModel().View()
-	for _, want := range []string{"glance", "Overview", "Pull requests", "Welcome to glance", "Connecting to GitHub"} {
+	for _, want := range []string{"glance", "Pull requests", "1 Pull requests", "Loading open pull requests"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view %q does not contain %q", view, want)
 		}
 	}
+	if strings.Contains(view, "Overview") {
+		t.Errorf("removed overview still appears in the landing screen: %s", view)
+	}
 }
 
-func TestViewerIsShownInOverview(t *testing.T) {
+func TestPullRequestsAreTheLandingSection(t *testing.T) {
+	for _, width := range []int{30, 80, 120} {
+		m := initialModel()
+		m.width = width
+		if m.activeSection != 0 || len(sections) != 3 || sections[0] != "Pull requests" {
+			t.Fatalf("landing section is not the PR inbox: section=%d tabs=%v", m.activeSection, sections)
+		}
+		for i := range sections {
+			m.activeSection = i
+			if view := m.View(); strings.Contains(view, "Overview") || strings.Contains(view, "OVERVIEW") {
+				t.Errorf("removed overview visible in section %d at width %d: %s", i, width, view)
+			}
+		}
+		m.activeSection = 0
+		if width < 65 && !strings.Contains(m.navigation(width-4), "1 / 3") {
+			t.Errorf("narrow tab counter still includes the removed page: %s", m.navigation(width-4))
+		}
+	}
+}
+
+func TestViewerIsShownInHeader(t *testing.T) {
 	m := initialModel()
 	updated, cmd := m.Update(dashboardLoadedMsg{viewer: githubapi.User{Login: "octocat"}})
 	if cmd != nil {
@@ -73,12 +96,12 @@ func TestViewerIsShownInOverview(t *testing.T) {
 	}
 
 	view := updated.(model).View()
-	if !strings.Contains(view, "Connected as @octocat") {
+	if !strings.Contains(view, "@octocat") {
 		t.Errorf("view %q does not show the authenticated user", view)
 	}
 }
 
-func TestGitHubAPIErrorIsShownInOverview(t *testing.T) {
+func TestGitHubAPIErrorIsShownInPRInbox(t *testing.T) {
 	m := initialModel()
 	updated, cmd := m.Update(dashboardLoadedMsg{err: errors.New("GitHub API is unavailable")})
 	if cmd != nil {
@@ -128,7 +151,7 @@ func TestInitLoadsViewerThroughGhAPI(t *testing.T) {
 	}
 
 	updated, _ := m.Update(msg)
-	if view := updated.(model).View(); !strings.Contains(view, "Connected as @octocat") {
+	if view := updated.(model).View(); !strings.Contains(view, "@octocat") {
 		t.Errorf("view %q does not show the authenticated user", view)
 	}
 }
@@ -158,7 +181,7 @@ func TestInitLoadsIssuesAndNotifications(t *testing.T) {
 	}
 }
 
-func TestGhAuthenticationErrorIsShownInOverview(t *testing.T) {
+func TestGhAuthenticationErrorIsShownInPRInbox(t *testing.T) {
 	runner := &modelTestRunner{
 		responses: map[string][]byte{"user": nil},
 		stderr:    []byte("gh: not logged into any GitHub hosts"),
@@ -176,7 +199,7 @@ func TestGhAuthenticationErrorIsShownInOverview(t *testing.T) {
 
 func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
 	m := initialModel()
-	m.activeSection = 1
+	m.activeSection = 0
 	m.height = 30
 	m.loading = false
 	m.pullRequests = []githubapi.PullRequest{
@@ -200,7 +223,7 @@ func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
 
 func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 	m := initialModel()
-	m.activeSection = 1
+	m.activeSection = 0
 	m.loading = false
 	m.pullRequests = []githubapi.PullRequest{
 		{Number: 42, Title: "Improve the selected PR title", Repository: "octo/project", User: githubapi.User{Login: "octocat"}},
@@ -241,7 +264,7 @@ func TestPullRequestListSelectionVisibleWithoutColor(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
 	m := initialModel()
-	m.activeSection = 1
+	m.activeSection = 0
 	m.loading = false
 	m.pullRequests = []githubapi.PullRequest{
 		{Number: 1, Repository: "octo/repo", Title: "First PR"},
@@ -256,7 +279,7 @@ func TestPullRequestListSelectionVisibleWithoutColor(t *testing.T) {
 
 func TestPullRequestEmptyAndErrorStates(t *testing.T) {
 	m := initialModel()
-	m.activeSection = 1
+	m.activeSection = 0
 	m.loading = false
 	if view := m.View(); !strings.Contains(view, "No open pull requests found") {
 		t.Errorf("empty view %q does not explain there are no PRs", view)
@@ -270,7 +293,7 @@ func TestPullRequestEmptyAndErrorStates(t *testing.T) {
 
 func TestPullRequestNavigationAndViewport(t *testing.T) {
 	m := initialModel()
-	m.activeSection = 1
+	m.activeSection = 0
 	m.height = 18
 	m.loading = false
 	for i := range 6 {
@@ -310,7 +333,7 @@ func TestOpeningPullRequestLoadsAndDisplaysDetails(t *testing.T) {
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
 	m.loading = false
-	m.activeSection = 1
+	m.activeSection = 0
 	m.viewer.Login = "octocat"
 	m.filter = minePRs
 	m.query = "useful"
@@ -370,7 +393,7 @@ func TestOpeningPullRequestAutomaticallyLoadsContinuousDiff(t *testing.T) {
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
 	m.loading = false
-	m.activeSection = 1
+	m.activeSection = 0
 	m.pullRequests = []githubapi.PullRequest{{Number: 42, Title: "Review me", Repository: "octo/project"}}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -757,7 +780,7 @@ func TestPullRequestDetailsScrollAndLayout(t *testing.T) {
 func TestIssueAndNotificationScreens(t *testing.T) {
 	m := initialModel()
 	m.loading = false
-	m.activeSection = 2
+	m.activeSection = 1
 	m.issues = []githubapi.Issue{{
 		Number: 12, Title: "Document API behavior", Repository: "octo/docs", Comments: 3,
 		User: githubapi.User{Login: "octocat"}, Labels: []githubapi.Label{{Name: "documentation"}},
@@ -769,7 +792,7 @@ func TestIssueAndNotificationScreens(t *testing.T) {
 		}
 	}
 
-	m.activeSection = 3
+	m.activeSection = 2
 	m.notifications = []githubapi.Notification{{
 		ID: "thread-1", Unread: true, Reason: "review_requested", Repository: githubapi.NotificationRepository{FullName: "octo/docs"},
 		Subject: githubapi.NotificationSubject{Title: "Please review", Type: "PullRequest"},
@@ -785,7 +808,7 @@ func TestIssueAndNotificationScreens(t *testing.T) {
 func TestIssueAndNotificationNavigation(t *testing.T) {
 	m := initialModel()
 	m.loading = false
-	m.activeSection = 2
+	m.activeSection = 1
 	m.issues = []githubapi.Issue{{Number: 1}, {Number: 2}, {Number: 3}}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
@@ -818,11 +841,11 @@ func TestIssueAndNotificationErrorsAreIndependent(t *testing.T) {
 	if m.issueError != "issues unavailable" || len(m.notifications) != 1 || m.notificationError != "" {
 		t.Fatalf("dataset errors interfered: issue=%q notification=%q data=%+v", m.issueError, m.notificationError, m.notifications)
 	}
-	m.activeSection = 2
+	m.activeSection = 1
 	if view := m.View(); !strings.Contains(view, "Could not load issues") || !strings.Contains(view, "issues unavailable") {
 		t.Errorf("issue view lost its API error: %s", view)
 	}
-	m.activeSection = 3
+	m.activeSection = 2
 	if view := m.View(); !strings.Contains(view, "Still available") {
 		t.Errorf("notification data hidden by issue error: %s", view)
 	}
@@ -850,6 +873,7 @@ func key(text string) tea.KeyMsg {
 
 func TestFiltersAndSearchAreScopedToPullRequests(t *testing.T) {
 	m := initialModel()
+	m.activeSection = 1
 	m.loading = false
 	m.viewer.Login = "octocat"
 	m.pullRequests = []githubapi.PullRequest{
@@ -860,7 +884,7 @@ func TestFiltersAndSearchAreScopedToPullRequests(t *testing.T) {
 	if updated.(model).filter != allPRs {
 		t.Fatal("filter changed outside PR section")
 	}
-	m.activeSection = 1
+	m.activeSection = 0
 	for _, tc := range []struct {
 		key        string
 		wantFilter prFilter
@@ -897,7 +921,7 @@ func TestFiltersAndSearchAreScopedToPullRequests(t *testing.T) {
 
 func TestSearchEditingAndNoResults(t *testing.T) {
 	m := initialModel()
-	m.activeSection = 1
+	m.activeSection = 0
 	m.loading = false
 	m.pullRequests = []githubapi.PullRequest{{Title: "Hello", Repository: "team/hello"}}
 	for _, message := range []tea.KeyMsg{key("/"), key("x"), key("界")} {
@@ -921,7 +945,7 @@ func TestSearchEditingAndNoResults(t *testing.T) {
 func TestRefreshPreservesSelectionAndIgnoresStaleResponse(t *testing.T) {
 	m := initialModel()
 	m.loading = false
-	m.activeSection = 1
+	m.activeSection = 0
 	m.pullRequests = []githubapi.PullRequest{{Repository: "team/a", Number: 1}, {Repository: "team/b", Number: 2}}
 	m.selectedPR = 1
 	m.issues = []githubapi.Issue{{Repository: "team/a", Number: 3}, {Repository: "team/b", Number: 4}}
@@ -955,7 +979,7 @@ func TestViewFitsTerminalAndSanitizesTitles(t *testing.T) {
 		m := initialModel()
 		m.width, m.height = size.width, size.height
 		m.loading = false
-		m.activeSection = 1
+		m.activeSection = 0
 		m.pullRequests = []githubapi.PullRequest{{Repository: "team/project", Number: 42, Title: "bad\x1b[31m\n multiline title", User: githubapi.User{Login: "octocat"}}}
 		view := m.View()
 		if strings.Contains(view, "\x1b[31m") || strings.Contains(view, "multiline\n") {
@@ -988,7 +1012,7 @@ func TestHelpOverlay(t *testing.T) {
 
 func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{30, 16}, {45, 18}, {80, 24}, {120, 36}} {
-		for _, state := range []string{"overview", "list", "search", "help", "error", "empty", "issues", "notifications", "issue-error", "notification-error"} {
+		for _, state := range []string{"list", "search", "help", "error", "empty", "issues", "notifications", "issue-error", "notification-error"} {
 			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, state), func(t *testing.T) {
 				m := initialModel()
 				m.width, m.height = size.width, size.height
@@ -1003,31 +1027,31 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 				}
 				switch state {
 				case "list":
-					m.activeSection = 1
+					m.activeSection = 0
 					m.selectedPR = 14
 				case "search":
-					m.activeSection = 1
+					m.activeSection = 0
 					m.searching = true
 					m.query = "project"
 				case "help":
 					m.showHelp = true
 				case "error":
 					m.apiError = "GitHub denied access; check repository access and the permissions granted to gh."
-					m.activeSection = 1
+					m.activeSection = 0
 				case "empty":
 					m.pullRequests = nil
-					m.activeSection = 1
+					m.activeSection = 0
 				case "issues":
-					m.activeSection = 2
+					m.activeSection = 1
 					m.issues = []githubapi.Issue{{Number: 13, Repository: "company/project", Title: "An issue title", User: githubapi.User{Login: "octocat"}}}
 				case "notifications":
-					m.activeSection = 3
+					m.activeSection = 2
 					m.notifications = []githubapi.Notification{{ID: "one", Unread: true, Repository: githubapi.NotificationRepository{FullName: "company/project"}, Subject: githubapi.NotificationSubject{Type: "Issue", Title: "A notification title"}}}
 				case "issue-error":
-					m.activeSection = 2
+					m.activeSection = 1
 					m.issueError = "GitHub denied access; check repository access and the permissions granted to gh."
 				case "notification-error":
-					m.activeSection = 3
+					m.activeSection = 2
 					m.notificationError = "GitHub denied access; check repository access and the permissions granted to gh."
 				}
 				view := m.View()
@@ -1051,8 +1075,8 @@ func TestIssueAndNotificationEmptyStates(t *testing.T) {
 		section int
 		want    string
 	}{
-		{section: 2, want: "No open issues found"},
-		{section: 3, want: "No notifications were found"},
+		{section: 1, want: "No open issues found"},
+		{section: 2, want: "No notifications were found"},
 	} {
 		m.activeSection = tc.section
 		if view := m.View(); !strings.Contains(view, tc.want) {
@@ -1065,7 +1089,7 @@ func TestStatusColorsAndMonochromeFallback(t *testing.T) {
 	previous := lipgloss.ColorProfile()
 	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
 	m := initialModel()
-	m.activeSection = 1
+	m.activeSection = 0
 	m.loading = false
 	m.viewer.Login = "octocat"
 	m.pullRequests = []githubapi.PullRequest{
