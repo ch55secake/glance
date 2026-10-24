@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -40,8 +41,8 @@ func TestWideInboxWorkspaceTracksSelection(t *testing.T) {
 			}
 			m.setSelection(0)
 			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-			if cmd != nil || !strings.Contains(updated.(model).View(), "SELECTED  2 / 18") {
-				t.Errorf("section %d selection should update the preview without fetching data", section)
+			if !strings.Contains(updated.(model).View(), "SELECTED  2 / 18") || (cmd != nil) != (section == 0 && size.height >= 20) {
+				t.Errorf("section %d selection should update immediately; only PRs schedule delayed context", section)
 			}
 		}
 	}
@@ -80,5 +81,104 @@ func TestInboxWorkspaceWrapsUntrustedTitles(t *testing.T) {
 		if lipgloss.Width(line) > m.width {
 			t.Errorf("wide preview exceeds %d columns: %q", m.width, line)
 		}
+	}
+}
+
+func TestPRPreviewLoadsAfterSelectionAndCachesContext(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 120, 36
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{
+		{Number: 1, Repository: "team/repo", Title: "First"},
+		{Number: 2, Repository: "team/repo", Title: "Second"},
+	}
+	updated, delayed := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if delayed == nil || !strings.Contains(m.View(), "SELECTED  2 / 2") {
+		t.Fatal("selection did not update immediately and schedule delayed details")
+	}
+	updated, _ = m.Update(previewReadyMsg{key: "team/repo#1", epoch: m.previewEpoch})
+	if updated.(model).previewPending["team/repo#1"] {
+		t.Fatal("stale selection began loading")
+	}
+	updated, cmd := m.Update(previewReadyMsg{key: "team/repo#2", epoch: m.previewEpoch})
+	m = updated.(model)
+	if cmd == nil || !m.previewPending["team/repo#2"] {
+		t.Fatal("settled selection did not begin loading")
+	}
+	updated, duplicate := m.Update(previewReadyMsg{key: "team/repo#2", epoch: m.previewEpoch})
+	if duplicate != nil {
+		t.Fatal("duplicate timer began another request")
+	}
+	m = updated.(model)
+	mergeable := true
+	updated, _ = m.Update(previewLoadedMsg{key: "team/repo#2", epoch: m.previewEpoch, details: githubapi.PullRequestDetails{
+		PullRequest: githubapi.PullRequest{Number: 2},
+		Body:        "An important change with enough context to decide what to review.",
+		Mergeable:   &mergeable,
+		CheckRuns:   []githubapi.CheckRun{{Name: "Build", Conclusion: "success"}},
+		Reviews:     []githubapi.PullRequestReview{{User: githubapi.User{Login: "reviewer"}, State: "APPROVED"}},
+	}})
+	m = updated.(model)
+	view := m.View()
+	for _, want := range []string{"An important change", "Mergeable", "checks ✓1", "Reviews  1", "Build", "@reviewer"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("loaded preview missing %q: %s", want, view)
+		}
+	}
+	if m.schedulePRPreview() != nil || len(m.previewCache) != 1 {
+		t.Fatal("cached preview would be fetched again")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ = updated.(model).Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if updated.(model).schedulePRPreview() != nil {
+		t.Fatal("switching sections lost cached PR preview")
+	}
+	updated, _ = updated.(model).Update(key("r"))
+	m = updated.(model)
+	if len(m.previewCache) != 0 || m.previewEpoch == 0 {
+		t.Fatal("refresh did not invalidate the preview cache")
+	}
+	updated, _ = m.Update(previewLoadedMsg{key: "team/repo#2", epoch: m.previewEpoch - 1, err: errors.New("old request")})
+	if updated.(model).previewErrors["team/repo#2"] != "" {
+		t.Fatal("stale request after refresh changed the preview")
+	}
+}
+
+func TestOtherInboxPreviewsUseAvailableContext(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 120, 36
+	m.loading = false
+	m.activeSection = 1
+	m.issues = []githubapi.Issue{{Number: 12, Repository: "team/repo", Title: "Investigate timeout", Body: "Reproduce by starting a long job and checking its status.", Comments: 3}}
+	if view := m.View(); !strings.Contains(view, "Reproduce by starting a long job") || !strings.Contains(view, "3 comments") {
+		t.Errorf("issue preview lost description: %s", view)
+	}
+	m.activeSection = 2
+	m.notifications = []githubapi.Notification{{Reason: "review_requested", Subject: githubapi.NotificationSubject{Title: "Review this PR", Type: "PullRequest"}}}
+	if view := m.View(); !strings.Contains(view, "Your review was requested") || !strings.Contains(view, "review_requested") {
+		t.Errorf("notification preview lost its reason: %s", view)
+	}
+}
+
+func TestPRPreviewCacheBoundedAndErrorsDoNotRetryUntilRefresh(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 120, 36
+	m.loading = false
+	m.pullRequests = []githubapi.PullRequest{{Number: 1, Repository: "team/repo"}}
+	for i := 1; i <= previewCacheLimit+3; i++ {
+		m.storePRPreview(fmt.Sprintf("team/repo#%d", i), githubapi.PullRequestDetails{PullRequest: githubapi.PullRequest{Number: i}})
+	}
+	if len(m.previewCache) != previewCacheLimit || len(m.previewOrder) != previewCacheLimit {
+		t.Fatalf("preview cache grew without bound: %d", len(m.previewCache))
+	}
+	updated, _ := m.Update(previewLoadedMsg{key: "team/repo#1", epoch: m.previewEpoch, err: errors.New("API unavailable")})
+	m = updated.(model)
+	if m.schedulePRPreview() != nil || !strings.Contains(m.View(), "Context unavailable") {
+		t.Fatal("preview error did not preserve fallback and suppress automatic retries")
+	}
+	m.clearPRPreviews()
+	if m.schedulePRPreview() == nil {
+		t.Fatal("refresh should allow retrying a failed preview")
 	}
 }

@@ -9,8 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Wide inboxes are a compact selection rail beside a full-width preview. No
-// extra API requests are needed when moving through the rail.
+// Wide inboxes are a compact selection rail beside a full-width preview.
 type workspaceItem struct {
 	title   string
 	context string
@@ -34,11 +33,141 @@ func (m model) pullRequestWorkspace(items []githubapi.PullRequest, width, headin
 			state = draftBadge.Render(" ◆ DRAFT ")
 		}
 		lines := previewTitle(pr.Title, w)
-		return append(lines, "", state,
+		lines = append(lines, "", state,
 			mutedStyle.Render(clipLine(workspaceReference(pr.Repository, pr.Number, w), w)),
 			"", textStyle.Render(clipLine("By @"+safeText(pr.User.Login), w)),
 			mutedStyle.Render(clipLine("Updated "+relativeTime(pr.UpdatedAt), w)))
+		return append(lines, m.prPreviewContext(fmt.Sprintf("%s#%d", pr.Repository, pr.Number), w, max(0, m.height-3-headingRows-2-len(lines)-4))...)
 	})
+}
+
+func (m model) prPreviewContext(key string, width, available int) []string {
+	if available < 1 {
+		return nil
+	}
+	details, ok := m.previewCache[key]
+	if !ok {
+		if problem := m.previewErrors[key]; problem != "" {
+			return []string{"", warnStyle.Render("Context unavailable · r to retry"), mutedStyle.Render(clipLine(problem, width))}
+		}
+		status := "Loading review context…"
+		if !m.previewPending[key] {
+			status = "Review context will load shortly…"
+		}
+		return []string{"", mutedStyle.Render(clipLine(status, width))}
+	}
+	lines := []string{""}
+	mergeability := "Mergeability pending"
+	style := warnStyle
+	if details.Mergeable != nil {
+		if *details.Mergeable {
+			mergeability = "✓ Mergeable"
+			style = goodStyle
+		} else {
+			mergeability = "✕ Not mergeable"
+			style = errorStyle
+		}
+	}
+	pass, fail, running := 0, 0, 0
+	for _, check := range details.CheckRuns {
+		switch check.Conclusion {
+		case "success", "neutral", "skipped":
+			pass++
+		case "failure", "timed_out", "action_required":
+			fail++
+		default:
+			running++
+		}
+	}
+	checks := fmt.Sprintf("checks ✓%d ✕%d ◌%d", pass, fail, running)
+	if details.ChecksError != "" {
+		checks = "checks unavailable"
+	}
+	lines = append(lines, style.Render(clipLine(mergeability+"  ·  "+checks, width)))
+	if len(lines) < available {
+		status := fmt.Sprintf("Reviews  %d  ·  requested  %d", len(details.Reviews), len(details.RequestedReviewers))
+		if details.ReviewsError != "" {
+			status = "Reviews unavailable"
+		}
+		lines = append(lines, mutedStyle.Render(clipLine(status, width)))
+	}
+	if details.Head.Ref != "" && details.Base.Ref != "" && available >= 9 {
+		lines = append(lines, mutedStyle.Render(clipLine(safeText(details.Head.Ref)+" → "+safeText(details.Base.Ref), width)))
+	}
+	if len(lines)+1 < available {
+		if available-len(lines) >= 4 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, accentStyle.Render("DESCRIPTION"))
+		body := previewExcerpt(details.Body)
+		if body == "" {
+			body = "No description provided."
+		}
+		bodyLimit := available
+		if available >= 12 && len(details.CheckRuns)+len(details.Reviews)+len(details.RequestedReviewers) > 0 {
+			bodyLimit -= min(6, len(details.CheckRuns)+len(details.Reviews)+len(details.RequestedReviewers)+2)
+		}
+		for _, part := range wrapPreviewWords(body, width) {
+			if len(lines) >= bodyLimit {
+				break
+			}
+			lines = append(lines, mutedStyle.Render(part))
+		}
+	}
+	if len(details.CheckRuns) > 0 && len(lines)+2 < available {
+		lines = append(lines, "", accentStyle.Render("CHECKS"))
+		for _, check := range details.CheckRuns {
+			if len(lines) >= available {
+				break
+			}
+			label, style := checkStyle(check)
+			lines = append(lines, style.Render(clipLine(label+"  "+safeText(check.Name), width)))
+		}
+	}
+	if len(details.RequestedReviewers)+len(details.Reviews) > 0 && len(lines)+2 < available {
+		lines = append(lines, "", accentStyle.Render("REVIEW ACTIVITY"))
+		for _, reviewer := range details.RequestedReviewers {
+			if len(lines) >= available {
+				break
+			}
+			lines = append(lines, mutedStyle.Render(clipLine("Requested  @"+safeText(reviewer.Login), width)))
+		}
+		for _, review := range details.Reviews {
+			if len(lines) >= available {
+				break
+			}
+			lines = append(lines, textStyle.Render(clipLine("@"+safeText(review.User.Login)+"  "+safeText(review.State), width)))
+		}
+	}
+	return lines
+}
+
+func wrapPreviewWords(text string, width int) []string {
+	var lines []string
+	current := ""
+	for _, word := range strings.Fields(text) {
+		if lipgloss.Width(word) > width {
+			if current != "" {
+				lines = append(lines, current)
+			}
+			parts := wrapDiffLine(word, width)
+			lines = append(lines, parts[:len(parts)-1]...)
+			current = parts[len(parts)-1]
+			continue
+		}
+		if current != "" && lipgloss.Width(current+" "+word) > width {
+			lines = append(lines, current)
+			current = ""
+		}
+		if current != "" {
+			current += " "
+		}
+		current += word
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
 }
 
 func (m model) issueWorkspace(width, headingRows int) []string {
@@ -62,6 +191,12 @@ func (m model) issueWorkspace(width, headingRows int) []string {
 			}
 			lines = append(lines, "", mutedStyle.Render(clipLine("Labels  "+strings.Join(labels, ", "), w)))
 		}
+		if strings.TrimSpace(issue.Body) != "" {
+			lines = append(lines, "", accentStyle.Render("DESCRIPTION"))
+			for _, part := range wrapPreviewWords(previewExcerpt(issue.Body), w) {
+				lines = append(lines, mutedStyle.Render(part))
+			}
+		}
 		return lines
 	})
 }
@@ -83,11 +218,35 @@ func (m model) notificationWorkspace(width, headingRows int) []string {
 			state = unreadBadge.Render(" ● UNREAD ")
 		}
 		lines := previewTitle(notification.Subject.Title, w)
-		return append(lines, "", state,
+		lines = append(lines, "", state,
 			mutedStyle.Render(clipLine(safeText(notification.Repository.FullName)+"  ·  "+safeText(notification.Subject.Type), w)),
-			"", textStyle.Render(clipLine(safeText(notification.Reason), w)),
-			mutedStyle.Render(clipLine("Updated "+relativeTime(notification.UpdatedAt), w)))
+			"", mutedStyle.Render(clipLine("Updated "+relativeTime(notification.UpdatedAt), w)))
+		if notification.LastReadAt != nil {
+			lines = append(lines, mutedStyle.Render(clipLine("Last read "+relativeTime(*notification.LastReadAt), w)))
+		}
+		return append(lines, "", accentStyle.Render("WHY THIS IS IN YOUR INBOX"),
+			textStyle.Render(clipLine(notificationReason(notification.Reason), w)),
+			mutedStyle.Render(clipLine("Reason: "+safeText(notification.Reason), w)))
 	})
+}
+
+func notificationReason(reason string) string {
+	switch reason {
+	case "review_requested":
+		return "Your review was requested"
+	case "mention", "team_mention":
+		return "You or your team were mentioned"
+	case "assign":
+		return "You were assigned"
+	case "author":
+		return "You created this thread"
+	case "comment":
+		return "A new comment was posted"
+	case "ci_activity":
+		return "A check or workflow was updated"
+	default:
+		return safeText(reason)
+	}
 }
 
 func previewTitle(title string, width int) []string {
@@ -97,6 +256,14 @@ func previewTitle(title string, width int) []string {
 		lines = append(lines, textStyle.Bold(true).Render(part))
 	}
 	return lines
+}
+
+func previewExcerpt(body string) string {
+	clean := []rune(strings.Join(strings.Fields(safeText(body)), " "))
+	if len(clean) > 2000 {
+		return string(clean[:2000]) + "…"
+	}
+	return string(clean)
 }
 
 func workspaceReference(repository string, number, width int) string {

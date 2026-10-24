@@ -115,6 +115,23 @@ func TestGetPullRequestDetailsLoadsReviewStatusChecksAndMergeMethods(t *testing.
 	}
 }
 
+func TestGetPullRequestPreviewOmitsMergeSettingsRequest(t *testing.T) {
+	runner := &routingRunner{responses: map[string][]byte{
+		"repos/octo/project/pulls/42":                  []byte(`{"number":42,"body":"Review context","head":{"sha":"abc123"}}`),
+		"repos/octo/project/pulls/42/reviews":          []byte(`[[{"state":"APPROVED"}]]`),
+		"repos/octo/project/commits/abc123/check-runs": []byte(`[{"check_runs":[{"name":"CI","conclusion":"success"}]}]`),
+	}}
+	details, err := NewClientWithRunner(runner).GetPullRequestPreview(context.Background(), "octo", "project", 42)
+	if err != nil || details.Number != 42 || details.Body != "Review context" || len(details.CheckRuns) != 1 || len(details.Reviews) != 1 {
+		t.Fatalf("preview details=%+v error=%v", details, err)
+	}
+	for _, call := range runner.calls {
+		if call[len(call)-1] == "repos/octo/project" {
+			t.Fatalf("preview unexpectedly fetched merge settings: %#v", runner.calls)
+		}
+	}
+}
+
 func TestGetPullRequestDetailsKeepsMainDetailsWhenOptionalRequestsFail(t *testing.T) {
 	runner := &routingRunner{
 		responses: map[string][]byte{
