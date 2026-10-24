@@ -73,13 +73,11 @@ func (m model) View() string {
 			lines = append(lines, content[start:end]...)
 		}
 		lines = append(lines, m.mergeActionPanel(inner)...)
-	case m.activeSection == 1:
-		lines = append(lines, m.pullRequestView(inner)...)
 	case m.activeSection == 0:
-		lines = append(lines, m.overviewView(inner)...)
-	case m.activeSection == 2:
+		lines = append(lines, m.pullRequestView(inner)...)
+	case m.activeSection == 1:
 		lines = append(lines, m.issueView(inner)...)
-	case m.activeSection == 3:
+	case m.activeSection == 2:
 		lines = append(lines, m.notificationView(inner)...)
 	default:
 		lines = append(lines, m.placeholderView(inner)...)
@@ -149,11 +147,6 @@ func (m model) navigation(width int) string {
 		}
 	}
 	return "  " + strings.Join(tabs, " ")
-}
-
-func statCard(label string, count int, style lipgloss.Style, background lipgloss.Color) string {
-	return style.Bold(true).Background(background).Padding(0, 1).
-		Render(fmt.Sprintf("%d %s", count, label))
 }
 
 func (m model) placeholderView(width int) []string {
@@ -296,18 +289,14 @@ func (m model) helpView(width int) []string {
 			"esc          Return to previous section", "?            Close help", "q            Quit",
 		}
 	} else if m.activeSection == 0 {
-		shortcuts = []string{"←/→ or h/l  Switch sections", "↑/↓ or j/k  Select next-up item", "Home / End   First / last item", "enter        Open PR or jump to inbox", "r            Refresh", "?            Close help", "q            Quit"}
-	} else if m.activeSection == 1 {
 		shortcuts = append(shortcuts, "enter        Open PR details", "/            Search PRs", "a / m / d    All / mine / drafts", "esc          Clear search & filter")
 	}
 	if m.height < 19 {
 		if m.detailOpen {
 			shortcuts = []string{"↑/↓ scroll   PgUp/PgDn page", "m merge   r refresh", "esc back   ? close   q quit"}
-		} else if m.activeSection == 0 {
-			shortcuts = []string{"←/→ sections   ↑/↓ next up", "enter open or jump to inbox", "r refresh   ? close   q quit"}
 		} else {
 			shortcuts = []string{"←/→ sections   ↑/↓ select", "r refresh   ? close   q quit"}
-			if m.activeSection == 1 {
+			if m.activeSection == 0 {
 				shortcuts = append(shortcuts, "enter details   / search   a/m/d filters")
 			}
 		}
@@ -958,15 +947,8 @@ func (m model) footer(width int) string {
 	} else {
 		switch m.activeSection {
 		case 0:
-			help = "↑/↓ next up   enter open   ←/→ sections   r refresh"
-			if width < 55 {
-				help = "↑/↓ select   enter open   r refresh"
-			}
-		case 1:
 			help = "enter details   ↑/↓ select   a/m/d filter   / search"
-		case 2:
-			help = "↑/↓ select   r refresh   ? help   q quit"
-		case 3:
+		case 1, 2:
 			help = "↑/↓ select   r refresh   ? help   q quit"
 		}
 	}

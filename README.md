@@ -28,15 +28,13 @@ make run
 ```
 
 Use left/right or `h`/`l` to switch sections; press `?` for the full shortcut
-list and `q` to quit. Overview prioritizes unread review requests, your PRs,
-other unread notifications, open PRs, and an issue. Use up/down or `j`/`k` to
-select a next-up item and `enter` to open its PR or jump to its inbox entry.
-The Pull requests section loads open PRs from repositories
-you own, collaborate on, or can access through an organization. Navigate with
-up/down or `j`/`k`, search with `/`, and filter with `a` (all), `m` (authored by
-you), or `d` (drafts). The selected PR is highlighted with its title and
-position in the list; draft status and the PR number stay visible in narrow
-terminals. Press `esc` to clear the active search and filter, or `r`
+list and `q` to quit. glance opens directly to Pull requests, which loads PRs
+from repositories you own, collaborate on, or can access through an
+organization. Navigate with up/down or `j`/`k`, search with `/`, and filter
+with `a` (all), `m` (authored by you), or `d` (drafts). The selected PR is
+highlighted with its title and position in the list; draft status and the PR
+number stay visible in narrow terminals. Press `esc` to clear the active
+search and filter, or `r`
 to refresh. Press `enter` on a PR to open its details and automatically load all
 changed files and patches in the same continuous, scrollable view. Use up/down
 or `j`/`k` to scroll through the details and diff, `PgUp`/`PgDn` to move by a

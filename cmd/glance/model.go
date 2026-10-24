@@ -14,7 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var sections = []string{"Overview", "Pull requests", "Issues", "Notifications"}
+var sections = []string{"Pull requests", "Issues", "Notifications"}
 
 const dashboardLoadTimeout = 2 * time.Minute
 
@@ -22,7 +22,6 @@ type model struct {
 	width                int
 	height               int
 	activeSection        int
-	overviewSelection    int
 	loading              bool
 	viewer               githubapi.User
 	apiError             string
@@ -156,10 +155,7 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	if m.selectedPR < 0 || m.selectedPR >= len(items) {
 		return nil
 	}
-	return m.openPullRequest(items[m.selectedPR])
-}
-
-func (m *model) openPullRequest(pr githubapi.PullRequest) tea.Cmd {
+	pr := items[m.selectedPR]
 	m.detailKey = fmt.Sprintf("%s#%d", pr.Repository, pr.Number)
 	m.detailOpen = true
 	m.detailLoading = true
@@ -423,7 +419,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		selectedPR := m.selectedKey()
-		selectedOverview := m.selectedOverviewKey()
 		selectedIssue := m.selectedIssueKey()
 		selectedNotification := m.selectedNotificationID()
 		m.loading = false
@@ -449,7 +444,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.restoreSelection(selectedPR)
 		m.restoreIssueSelection(selectedIssue)
 		m.restoreNotificationSelection(selectedNotification)
-		m.restoreOverviewSelection(selectedOverview)
 	case pullRequestDetailsLoadedMsg:
 		if msg.requestID != m.detailRequestID || msg.key != m.detailKey {
 			break
@@ -532,37 +526,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.detailOpen {
 			return m.updatePullRequestDetailKey(msg)
 		}
-		if m.activeSection == 0 {
-			items := m.overviewItems()
-			switch msg.String() {
-			case "up", "k":
-				m.overviewSelection = max(0, m.overviewSelection-1)
-				return m, nil
-			case "down", "j":
-				m.overviewSelection = min(max(0, len(items)-1), m.overviewSelection+1)
-				return m, nil
-			case "home":
-				m.overviewSelection = 0
-				return m, nil
-			case "end":
-				m.overviewSelection = max(0, len(items)-1)
-				return m, nil
-			case "enter":
-				if m.overviewSelection >= len(items) {
-					return m, nil
-				}
-				item := items[m.overviewSelection]
-				switch item.kind {
-				case overviewPR:
-					return m, m.openPullRequest(item.pr)
-				case overviewIssue:
-					m.activeSection, m.selectedIssue = 2, item.index
-				case overviewNotification:
-					m.activeSection, m.selectedNotification = 3, item.index
-				}
-				return m, nil
-			}
-		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -579,23 +542,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "end":
 			m.setSelection(m.visibleItemTotal() - 1)
 		case "enter":
-			if m.activeSection == 1 {
+			if m.activeSection == 0 {
 				return m, m.openSelectedPullRequest()
 			}
 		case "?":
 			m.showHelp = true
 		case "/":
-			if m.activeSection == 1 {
+			if m.activeSection == 0 {
 				m.searching = true
 			}
 		case "esc":
-			if m.activeSection == 1 {
+			if m.activeSection == 0 {
 				m.query = ""
 				m.filter = allPRs
 				m.selectedPR = 0
 			}
 		case "a", "m", "d":
-			if m.activeSection == 1 {
+			if m.activeSection == 0 {
 				switch msg.String() {
 				case "a":
 					m.filter = allPRs
@@ -649,11 +612,11 @@ func errorString(err error) string {
 
 func (m model) visibleItemTotal() int {
 	switch m.activeSection {
-	case 1:
+	case 0:
 		return len(m.filteredPRs())
-	case 2:
+	case 1:
 		return len(m.issues)
-	case 3:
+	case 2:
 		return len(m.notifications)
 	default:
 		return 0
@@ -662,24 +625,24 @@ func (m model) visibleItemTotal() int {
 
 func (m *model) moveSelection(delta int) {
 	switch m.activeSection {
-	case 1:
+	case 0:
 		m.selectedPR += delta
 		m.clampSelectedPR()
-	case 2:
+	case 1:
 		m.selectedIssue = min(max(0, m.selectedIssue+delta), max(0, len(m.issues)-1))
-	case 3:
+	case 2:
 		m.selectedNotification = min(max(0, m.selectedNotification+delta), max(0, len(m.notifications)-1))
 	}
 }
 
 func (m *model) setSelection(index int) {
 	switch m.activeSection {
-	case 1:
+	case 0:
 		m.selectedPR = index
 		m.clampSelectedPR()
-	case 2:
+	case 1:
 		m.selectedIssue = min(max(0, index), max(0, len(m.issues)-1))
-	case 3:
+	case 2:
 		m.selectedNotification = min(max(0, index), max(0, len(m.notifications)-1))
 	}
 }
