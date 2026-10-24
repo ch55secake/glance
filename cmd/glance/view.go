@@ -83,6 +83,10 @@ func (m model) View() string {
 	}
 
 	if !m.detailOpen || m.showHelp {
+		// Keep controls at the bottom as lists, empty states, and errors change size.
+		for len(lines) < m.height-2 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, "", m.footer(inner))
 	}
 	// Keep the view inside the terminal even on small screens or verbose API errors.
@@ -177,6 +181,9 @@ func (m model) issueView(width int) []string {
 	start := min(max(0, m.selectedIssue-visible/2), len(m.issues)-visible)
 	end := start + visible
 	for i := start; i < end; i++ {
+		if i > start && m.listRowSpacing() > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.issueRow(m.issues[i], width, i == m.selectedIssue)...)
 	}
 	return append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d of %d  ·  j/k move", start+1, end, len(m.issues)), width)))
@@ -237,6 +244,9 @@ func (m model) notificationView(width int) []string {
 	start := min(max(0, m.selectedNotification-visible/2), len(m.notifications)-visible)
 	end := start + visible
 	for i := start; i < end; i++ {
+		if i > start && m.listRowSpacing() > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.notificationRow(m.notifications[i], width, i == m.selectedNotification)...)
 	}
 	return append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d–%d of %d  ·  j/k move", start+1, end, len(m.notifications)), width)))
@@ -342,6 +352,9 @@ func (m model) pullRequestView(width int) []string {
 	start = min(start, len(items)-visible)
 	end := start + visible
 	for i := start; i < end; i++ {
+		if i > start && m.listRowSpacing() > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.prRow(items[i], width, i == m.selectedPR)...)
 	}
 	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d/%d selected  ·  showing %d–%d  ·  ↵ review  ·  / search", m.selectedPR+1, len(items), start+1, end), width)))
@@ -851,16 +864,27 @@ func (m model) filterBar(width int) string {
 	}
 	var parts []string
 	for _, choice := range choices {
-		label := fmt.Sprintf(" %s %s ", choice.key, choice.name)
+		label := fmt.Sprintf("%s %s", choice.key, choice.name)
 		if m.filter == choice.mode {
-			parts = append(parts, activeStyle.Render(label))
+			parts = append(parts, accentStyle.Underline(true).Render(label))
 		} else {
 			parts = append(parts, mutedStyle.Render(label))
 		}
 	}
-	bar := strings.Join(parts, " ")
+	bar := strings.Join(parts, "   ")
 	if lipgloss.Width(bar) > width {
-		bar = accentStyle.Render(clipLine("[a] All  [m] Mine  [d] Drafts", width))
+		parts = parts[:0]
+		for _, choice := range choices {
+			style := mutedStyle
+			if m.filter == choice.mode {
+				style = accentStyle.Underline(true)
+			}
+			parts = append(parts, style.Render(choice.key+" "+choice.name))
+		}
+		bar = strings.Join(parts, " ")
+	}
+	if lipgloss.Width(bar) > width {
+		return accentStyle.Render(clipLine("a/m/d filters", width))
 	}
 	return bar
 }
@@ -957,7 +981,14 @@ func (m model) visibleListCount() int {
 	if m.query != "" || m.searching {
 		reserved++
 	}
-	return max(1, (m.height-reserved)/3)
+	return max(1, (m.height-reserved+m.listRowSpacing())/(3+m.listRowSpacing()))
+}
+
+func (m model) listRowSpacing() int {
+	if m.height >= 24 {
+		return 1
+	}
+	return 0
 }
 
 // align places a left and a right label on a single line.

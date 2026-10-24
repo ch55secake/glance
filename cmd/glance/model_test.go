@@ -1101,6 +1101,66 @@ func TestInboxLayoutUsesWhitespaceAndTitleFirst(t *testing.T) {
 	}
 }
 
+func TestInboxFooterStaysAtBottomAsContentChanges(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 16}, {80, 24}, {120, 36}} {
+		m := initialModel()
+		m.width, m.height = size.width, size.height
+		m.loading = false
+		m.pullRequests = []githubapi.PullRequest{{Number: 1, Repository: "team/repo", Title: "One PR"}}
+		for _, state := range []string{"list", "empty", "error", "help"} {
+			m.showHelp = state == "help"
+			m.apiError = ""
+			if state == "error" {
+				m.apiError = "Could not connect"
+			}
+			if state == "empty" {
+				m.pullRequests = nil
+			}
+			lines := strings.Split(m.View(), "\n")
+			if len(lines) != size.height || lines[len(lines)-1] != m.footer(size.width-4) {
+				t.Errorf("%dx%d %s footer moved or was lost: %q", size.width, size.height, state, lines)
+			}
+		}
+	}
+}
+
+func TestPRFiltersHaveSubtleActiveState(t *testing.T) {
+	m := initialModel()
+	for _, width := range []int{26, 76} {
+		for _, filter := range []prFilter{allPRs, minePRs, draftPRs} {
+			m.filter = filter
+			bar := m.filterBar(width)
+			if lipgloss.Width(bar) > width {
+				t.Errorf("filter bar exceeds %d columns: %q", width, bar)
+			}
+			if !strings.Contains(bar, []string{"a All", "m Mine", "d Drafts"}[filter]) {
+				t.Errorf("filter %d missing from %q", filter, bar)
+			}
+		}
+	}
+}
+
+func TestListSpacingKeepsSelectionVisible(t *testing.T) {
+	for _, height := range []int{16, 24, 36} {
+		m := initialModel()
+		m.width, m.height = 80, height
+		m.loading = false
+		for i := 0; i < 18; i++ {
+			m.pullRequests = append(m.pullRequests, githubapi.PullRequest{
+				Number: i + 1, Repository: "team/repo", Title: fmt.Sprintf("Item %d", i+1),
+			})
+		}
+		m.selectedPR = 17
+		view := m.View()
+		if !strings.Contains(view, "▸ Item 18") || len(strings.Split(view, "\n")) != height {
+			t.Errorf("%d-row list lost selection or footer: %s", height, view)
+		}
+		if height >= 24 && strings.Count(view, "\n\n") < 2 {
+			t.Errorf("%d-row list lacks breathing room between items: %s", height, view)
+		}
+	}
+}
+
 func TestIssueAndNotificationEmptyStates(t *testing.T) {
 	m := initialModel()
 	m.loading = false
