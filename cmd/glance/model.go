@@ -38,6 +38,9 @@ type model struct {
 	searchDraft          string
 	searching            bool
 	showHelp             bool
+	paletteOpen          bool
+	paletteQuery         string
+	paletteSelection     int
 	requestID            int
 	prRequestID          int
 	prLoading            bool
@@ -480,7 +483,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedPR = 0
 		}
 	case previewReadyMsg:
-		if msg.epoch != m.previewEpoch || m.selectedKey() != msg.key || m.prLoading || m.width < 80 || m.height < 20 || m.activeSection != 0 || m.detailOpen || m.showHelp || m.searching {
+		if msg.epoch != m.previewEpoch || m.selectedKey() != msg.key || m.prLoading || m.width < 80 || m.height < 20 || m.activeSection != 0 || m.detailOpen || m.showHelp || m.paletteOpen || m.searching {
 			break
 		}
 		if len(m.previewPending) >= 2 || m.previewPending[msg.key] || m.previewErrors[msg.key] != "" {
@@ -564,6 +567,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cacheDetailLines()
 		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
 	case tea.KeyMsg:
+		if m.paletteOpen {
+			return m.updatePaletteKey(msg)
+		}
 		if m.searching {
 			switch msg.String() {
 			case "ctrl+c":
@@ -605,6 +611,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, m.schedulePRPreview()
+		}
+		if msg.String() == ":" && (!m.detailOpen || m.mergeDialog == noMergeDialog && !m.mergeInProgress) {
+			m.paletteOpen = true
+			m.paletteQuery = ""
+			m.paletteSelection = 0
+			return m, nil
 		}
 		if m.detailOpen {
 			updated, cmd := m.updatePullRequestDetailKey(msg)
