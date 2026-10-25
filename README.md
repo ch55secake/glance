@@ -28,8 +28,9 @@ make run
 ```
 
 Use left/right or `h`/`l` to switch sections; press `?` for the full shortcut
-list and `q` to quit. glance opens directly to Pull requests, searching
-repositories visible to your GitHub account. The PR inbox defaults to the
+list and `q` to quit. Press `:` for a command palette with navigation and common
+actions. glance opens directly to Pull requests, searching repositories visible
+to your GitHub account. The PR inbox defaults to the
 GitHub filter `is:pr is:open author:@me`. Press `/` to edit it using GitHub search qualifiers
 (for example, `repo:owner/name is:open`), `enter` to apply it, or `esc` to
 cancel. While editing, use left/right or Home/End to move the cursor through

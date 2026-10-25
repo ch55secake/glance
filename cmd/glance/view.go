@@ -47,6 +47,8 @@ func (m model) View() string {
 	}
 
 	switch {
+	case m.paletteOpen:
+		lines = append(lines, m.paletteView(inner)...)
 	case m.showHelp:
 		lines = append(lines, m.helpView(inner)...)
 	case m.detailOpen:
@@ -82,7 +84,7 @@ func (m model) View() string {
 		lines = append(lines, m.placeholderView(inner)...)
 	}
 
-	if !m.detailOpen || m.showHelp {
+	if !m.detailOpen || m.showHelp || m.paletteOpen {
 		// Keep controls at the bottom as lists, empty states, and errors change size.
 		for len(lines) < m.height-2 {
 			lines = append(lines, "")
@@ -290,12 +292,12 @@ func (m model) hasErrors() bool {
 func (m model) helpView(width int) []string {
 	shortcuts := []string{
 		"←/→ or h/l  Switch sections", "↑/↓ or j/k  Select list item", "Home / End   First / last item",
-		"r            Refresh", "?            Close help", "q            Quit",
+		"r            Refresh", ":            Command palette", "?            Close help", "q            Quit",
 	}
 	if m.detailOpen {
 		shortcuts = []string{
 			"↑/↓ or j/k  Scroll PR details and diff", "tab          Focus sidebar (wide terminals)", "PgUp/PgDn    Scroll a screen", "Home / End   First / last line",
-			"m            Merge pull request", "r            Refresh details and diff",
+			"m            Merge pull request", "r            Refresh details and diff", ":            Command palette",
 			"esc          Return to previous section", "?            Close help", "q            Quit",
 		}
 	} else if m.activeSection == 0 {
@@ -303,9 +305,9 @@ func (m model) helpView(width int) []string {
 	}
 	if m.height < 19 {
 		if m.detailOpen {
-			shortcuts = []string{"↑/↓ scroll   PgUp/PgDn page", "m merge   r refresh", "esc back   ? close   q quit"}
+			shortcuts = []string{"↑/↓ scroll   PgUp/PgDn page", "m merge   r refresh", ": commands   esc back   ? close   q quit"}
 		} else {
-			shortcuts = []string{"←/→ sections   ↑/↓ select", "r refresh   ? close   q quit"}
+			shortcuts = []string{"←/→ sections   ↑/↓ select", ": commands   r refresh   ? close   q quit"}
 			if m.activeSection == 0 {
 				shortcuts = append(shortcuts, "enter details   / edit GitHub filter")
 			}
@@ -966,6 +968,11 @@ func (m model) footer(width int) string {
 	}
 	if m.searching {
 		help = "←/→ move   Home/End jump   Del erase   enter apply   esc cancel"
+	}
+	if m.paletteOpen {
+		help = "↑/↓ choose   enter run   esc close   ctrl+u clear"
+	} else if !m.detailOpen && width >= 62 {
+		help = clipLine(help+"   : commands", width)
 	}
 	return "  " + mutedStyle.Render(clipLine(help, width))
 }
