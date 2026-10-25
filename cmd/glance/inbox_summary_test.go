@@ -31,8 +31,14 @@ func TestPalettePresetSearchesGitHubAndRejectsOlderResults(t *testing.T) {
 	}
 	updated, _ = m.Update(result)
 	m = updated.(model)
-	if m.prLoading || !strings.Contains(strings.Join(m.pullRequestToolbar(116), "\n"), "NEEDS MY REVIEW") {
-		t.Fatal("preset results did not settle into the matching inbox context")
+	if m.prLoading || !strings.Contains(strings.Join(m.pullRequestToolbar(116), "\n"), reviewRequestedQuery) {
+		t.Fatal("preset results did not settle into the filter box")
+	}
+	toolbar := strings.Join(m.pullRequestToolbar(116), "\n")
+	for _, removed := range []string{"MY PULL REQUESTS", "Your authored work", "NEEDS MY REVIEW", "change inbox view"} {
+		if strings.Contains(toolbar, removed) {
+			t.Fatalf("redundant query summary still appears: %s", toolbar)
+		}
 	}
 	m.applyPRQuery(defaultPRQuery)
 	if m.query != defaultPRQuery || m.searching {

@@ -6,7 +6,6 @@ import (
 	"glance/internal/githubapi"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 const reviewRequestedQuery = "is:pr is:open review-requested:@me"
@@ -35,26 +34,9 @@ func checkSummary(details githubapi.PullRequestDetails) string {
 
 func (m model) pullRequestToolbar(width int) []string {
 	box := m.githubFilterBox(width)
-	var summary []string
-	if width >= 100 {
-		title, subtitle := "CUSTOM FILTER", "GitHub search results"
-		switch m.query {
-		case defaultPRQuery:
-			title, subtitle = "MY PULL REQUESTS", "Your authored work"
-		case reviewRequestedQuery:
-			title, subtitle = "NEEDS MY REVIEW", "Waiting for your review"
-		case allOpenQuery:
-			title, subtitle = "ALL OPEN PRS", "Across your repositories"
-		}
-		available := width - 72
-		summary = []string{accentStyle.Render(clipLine(title, available)), textStyle.Render(clipLine(subtitle, available)), mutedStyle.Render(clipLine(": change inbox view", available))}
-	}
 	lines := make([]string, len(box))
 	for i, line := range box {
 		lines[i] = "  " + line
-		if len(summary) > i {
-			lines[i] = "  " + lipgloss.NewStyle().Width(68).Render(line) + "    " + summary[i]
-		}
 	}
 	return lines
 }
