@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"strings"
 
 	"glance/internal/githubapi"
@@ -19,6 +21,30 @@ type reviewFileAnchor struct {
 type reviewDocument struct {
 	lines []string
 	files []reviewFileAnchor
+}
+
+type reviewedFileSnapshot struct {
+	previousFilename string
+	status           string
+	additions        int
+	deletions        int
+	changes          int
+	patch            [sha256.Size]byte
+}
+
+func snapshotReviewFile(file githubapi.PullRequestFile) reviewedFileSnapshot {
+	hash := sha256.New()
+	_, _ = io.Copy(hash, strings.NewReader(file.Patch))
+	var patch [sha256.Size]byte
+	copy(patch[:], hash.Sum(nil))
+	return reviewedFileSnapshot{
+		previousFilename: file.PreviousFilename,
+		status:           file.Status,
+		additions:        file.Additions,
+		deletions:        file.Deletions,
+		changes:          file.Changes,
+		patch:            patch,
+	}
 }
 
 func appendReviewDiff(intro []string, diff reviewDocument) reviewDocument {
@@ -43,18 +69,20 @@ func (m model) currentReviewFile() int {
 	return -1
 }
 
-func (m model) reviewPosition() (int, int) {
+func (m model) reviewPosition() (string, int) {
 	index := m.currentReviewFile()
 	if index < 0 {
-		return -1, 0
+		return "", 0
 	}
-	return index, m.detailScroll - m.reviewFiles[index].row
+	return m.diffFiles[index].Filename, m.detailScroll - m.reviewFiles[index].row
 }
 
-func (m *model) restoreReviewPosition(index, offset int) {
-	if index >= 0 && index < len(m.reviewFiles) {
-		file := m.reviewFiles[index]
-		m.detailScroll = min(file.row+offset, file.end-1)
+func (m *model) restoreReviewPosition(path string, offset int) {
+	for _, anchor := range m.reviewFiles {
+		if anchor.index >= 0 && anchor.index < len(m.diffFiles) && m.diffFiles[anchor.index].Filename == path {
+			m.detailScroll = min(anchor.row+offset, anchor.end-1)
+			return
+		}
 	}
 }
 
@@ -86,7 +114,7 @@ func (m model) fileReviewed(index int) bool {
 	}
 	file := m.diffFiles[index]
 	previous, ok := m.reviewedFiles[file.Filename]
-	return ok && previous == file
+	return ok && index < len(m.diffFileSnapshots) && previous == m.diffFileSnapshots[index]
 }
 
 func (m model) reviewedFileCount() int {
@@ -100,16 +128,17 @@ func (m model) reviewedFileCount() int {
 }
 
 func (m *model) retainViewedFiles(files []githubapi.PullRequestFile) {
-	if len(m.reviewedFiles) == 0 {
-		return
-	}
-	viewed := make(map[string]githubapi.PullRequestFile)
-	for _, file := range files {
-		if previous, ok := m.reviewedFiles[file.Filename]; ok && previous == file {
-			viewed[file.Filename] = file
+	viewed := make(map[string]reviewedFileSnapshot)
+	snapshots := make([]reviewedFileSnapshot, len(files))
+	for i, file := range files {
+		snapshot := snapshotReviewFile(file)
+		snapshots[i] = snapshot
+		if previous, ok := m.reviewedFiles[file.Filename]; ok && previous == snapshot {
+			viewed[file.Filename] = snapshot
 		}
 	}
 	m.reviewedFiles = viewed
+	m.diffFileSnapshots = snapshots
 }
 
 func (m *model) toggleReviewedFile() {
@@ -123,9 +152,15 @@ func (m *model) toggleReviewedFile() {
 		return
 	}
 	if m.reviewedFiles == nil {
-		m.reviewedFiles = make(map[string]githubapi.PullRequestFile)
+		m.reviewedFiles = make(map[string]reviewedFileSnapshot)
 	}
-	m.reviewedFiles[file.Filename] = file
+	if index >= len(m.diffFileSnapshots) {
+		m.diffFileSnapshots = make([]reviewedFileSnapshot, len(m.diffFiles))
+		for i, current := range m.diffFiles {
+			m.diffFileSnapshots[i] = snapshotReviewFile(current)
+		}
+	}
+	m.reviewedFiles[file.Filename] = m.diffFileSnapshots[index]
 }
 
 func (m model) reviewLocation(width int) string {
@@ -155,6 +190,26 @@ func (m *model) openFilePicker() {
 	m.filePickerOpen = true
 	m.filePickerQuery = ""
 	m.filePickerSelection = max(0, m.currentReviewFile())
+}
+
+func (m model) filePickerSelectedPath() string {
+	files := m.matchingFiles()
+	if m.filePickerSelection < 0 || m.filePickerSelection >= len(files) {
+		return ""
+	}
+	return m.diffFiles[files[m.filePickerSelection]].Filename
+}
+
+func (m *model) restoreFilePickerSelection(path string) {
+	if path == "" {
+		return
+	}
+	for i, index := range m.matchingFiles() {
+		if m.diffFiles[index].Filename == path {
+			m.filePickerSelection = i
+			return
+		}
+	}
 }
 
 func (m model) matchingFiles() []int {

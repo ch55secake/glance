@@ -61,7 +61,10 @@ type model struct {
 	detailLines          []string
 	detailLinesWidth     int
 	reviewFiles          []reviewFileAnchor
-	reviewedFiles        map[string]githubapi.PullRequestFile
+	reviewedFiles        map[string]reviewedFileSnapshot
+	diffFileSnapshots    []reviewedFileSnapshot
+	pendingReviewPath    string
+	pendingReviewOffset  int
 	filePickerOpen       bool
 	filePickerQuery      string
 	filePickerSelection  int
@@ -204,6 +207,9 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	m.detailLines = nil
 	m.reviewFiles = nil
 	m.reviewedFiles = nil
+	m.diffFileSnapshots = nil
+	m.pendingReviewPath = ""
+	m.pendingReviewOffset = 0
 	m.filePickerOpen = false
 	m.sidebarScroll = 0
 	m.sidebarFocus = false
@@ -389,6 +395,9 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r", "R":
 		if !m.detailLoading && !m.diffLoading {
+			if path, offset := m.reviewPosition(); path != "" {
+				m.pendingReviewPath, m.pendingReviewOffset = path, offset
+			}
 			m.detailLines = nil
 			m.detailLoading = true
 			m.detailError = ""
@@ -396,7 +405,6 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.diffLoaded = false
 			m.diffError = ""
 			m.diffFiles = nil
-			m.detailScroll = 0
 			m.detailRequestID++
 			m.cacheDetailLines()
 			return m, tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
@@ -467,9 +475,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next.inboxPreviewScroll = 0
 		next.inboxLines = nil
 	}
-	if _, key := msg.(tea.KeyMsg); !key {
-		next.inboxLines = nil
-	}
 	if next.hasInboxPreview() && !next.detailOpen && !next.paletteOpen && !next.showHelp {
 		next.cacheInboxPreview()
 	}
@@ -488,7 +493,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		file, offset := m.reviewPosition()
+		file, offset := m.pendingReviewPath, m.pendingReviewOffset
+		if file == "" {
+			file, offset = m.reviewPosition()
+		}
 		m.width = msg.Width
 		m.height = msg.Height
 		if m.searching {
@@ -511,6 +519,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.requestID != m.requestID {
 			break
 		}
+		m.inboxLines = nil
 		selectedPR := m.selectedKey()
 		selectedIssue := m.selectedIssueKey()
 		selectedNotification := m.selectedNotificationID()
@@ -547,6 +556,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.requestID != m.prRequestID {
 			break
 		}
+		m.inboxLines = nil
 		m.prLoading = false
 		m.apiError = errorString(msg.err)
 		if msg.err == nil {
@@ -574,6 +584,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		delete(m.previewPending, msg.key)
 		if msg.err != nil {
+			m.inboxLines = nil
 			if m.previewErrors == nil {
 				m.previewErrors = make(map[string]string)
 			}
@@ -607,12 +618,19 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.requestID != m.diffRequestID || msg.key != m.detailKey {
 			break
 		}
+		file, offset := m.pendingReviewPath, m.pendingReviewOffset
+		if file == "" {
+			file, offset = m.reviewPosition()
+		}
+		pickerPath := m.filePickerSelectedPath()
 		m.diffLoading = false
 		if msg.err != nil {
 			m.diffError = safeText(msg.err.Error())
 			m.diffLoaded = false
 			m.detailLines = nil
 			m.cacheDetailLines()
+			m.restoreReviewPosition(file, offset)
+			m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
 			break
 		}
 		m.retainViewedFiles(msg.files)
@@ -621,7 +639,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffError = ""
 		m.detailLines = nil
 		m.cacheDetailLines()
+		m.restoreReviewPosition(file, offset)
 		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
+		m.pendingReviewPath, m.pendingReviewOffset = "", 0
+		m.restoreFilePickerSelection(pickerPath)
 	case pullRequestMergedMsg:
 		if msg.requestID != m.mergeRequestID || msg.key != m.detailKey {
 			break

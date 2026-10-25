@@ -28,7 +28,7 @@ func (m model) pullRequestWorkspace(items []githubapi.PullRequest, width int) []
 		}
 		meta := "@" + safeText(pr.User.Login) + " · " + relativeTime(pr.UpdatedAt)
 		if details, ok := m.previewCache[fmt.Sprintf("%s#%d", pr.Repository, pr.Number)]; ok {
-			meta = checkSummary(details)
+			meta = checkSummary(details) + " · " + relativeTime(pr.UpdatedAt)
 		}
 		rail = append(rail, workspaceItem{safeText(pr.Title), workspaceReference(pr.Repository, pr.Number, railTextWidth-lipgloss.Width(state)) + state, meta})
 	}

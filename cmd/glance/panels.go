@@ -68,6 +68,7 @@ func (m model) modalView() string {
 			break
 		}
 		line = strings.TrimPrefix(line, strings.Repeat(" ", left))
+		lines[row] = strings.Repeat(" ", m.width)
 		lines[row] = ansi.Cut(lines[row], 0, left-1) + " " + line + " " + ansi.Cut(lines[row], left+cardWidth+1, m.width)
 	}
 	lines[1] = m.navigation(width)

@@ -86,10 +86,28 @@ func TestFileNavigationKeepsAnchorsThroughResizeAndLateDetails(t *testing.T) {
 	// A subsequent data refresh should keep navigation tied to the new rendered rows.
 	files := append([]githubapi.PullRequestFile(nil), m.diffFiles...)
 	files[0].Patch += strings.Repeat("+extra context\n", 40)
+	fileOffset := m.detailScroll - m.reviewFiles[1].row
 	updated, _ = m.Update(pullRequestFilesLoadedMsg{key: m.detailKey, files: files})
-	m = applyKeys(updated.(model), key("d"), key("]"))
+	m = updated.(model)
 	if m.currentReviewFile() != 1 || !strings.Contains(m.View(), "TestReview") {
-		t.Fatal("refreshed patch length invalidated file navigation")
+		t.Fatal("refreshed patch length shifted the review away from the current file")
+	}
+	if got := m.detailScroll - m.reviewFiles[1].row; got != fileOffset {
+		t.Fatalf("refresh changed the offset inside the same file: got %d, want %d", got, fileOffset)
+	}
+	// The explicit refresh flow temporarily replaces file rows with a loading
+	// message; returning files must still restore the path-based anchor.
+	m.detailScroll += 3
+	fileOffset = m.detailScroll - m.reviewFiles[1].row
+	updated, cmd := m.Update(key("r"))
+	m = updated.(model)
+	if cmd == nil || m.pendingReviewPath != files[1].Filename {
+		t.Fatal("refresh did not retain the current path anchor")
+	}
+	updated, _ = m.Update(pullRequestFilesLoadedMsg{requestID: m.diffRequestID, key: m.detailKey, files: files})
+	m = updated.(model)
+	if m.currentReviewFile() != 1 || m.detailScroll-m.reviewFiles[1].row != fileOffset {
+		t.Fatal("refresh did not restore the same file and offset")
 	}
 }
 
@@ -166,6 +184,30 @@ func TestFilePickerAndJumpLayoutsAcrossTerminalSizes(t *testing.T) {
 					t.Fatal("monochrome file navigation contains ANSI colors")
 				}
 			}
+		}
+	}
+}
+
+func TestPickersDimButPreserveWorkspaceContextWithoutBleed(t *testing.T) {
+	for _, picker := range []string{"palette", "files"} {
+		m := reviewNavigationModel()
+		m.jumpToReviewFile(0)
+		if picker == "palette" {
+			m = applyKeys(m, key(":"))
+		} else {
+			m = applyKeys(m, key("f"))
+		}
+		view := m.View()
+		if !strings.Contains(view, "cmd/glance/model.go") || !strings.Contains(view, "0/3 viewed") {
+			t.Fatalf("%s picker obscured navigation context:\n%s", picker, view)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, "╭─") && strings.Contains(line, "+func update() {}") {
+				t.Fatalf("%s overlay leaked diff text into its card:\n%s", picker, view)
+			}
+		}
+		if strings.Contains(view, "COMMAND PALETTE") == (picker == "files") {
+			t.Fatalf("%s picker rendered the wrong overlay:\n%s", picker, view)
 		}
 	}
 }
