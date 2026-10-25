@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/glamour"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
+	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
@@ -15,12 +17,12 @@ func markdownLines(body string, width int) []string {
 	if strings.TrimSpace(body) == "" {
 		return []string{"  " + mutedStyle.Render("(No description.)")}
 	}
-	style := "dark"
+	style := glamour.WithStyles(markdownThemeStyles())
 	if lipgloss.ColorProfile() == termenv.Ascii {
-		style = "notty"
+		style = glamour.WithStandardStyle("notty")
 	}
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(style),
+		style,
 		glamour.WithColorProfile(lipgloss.ColorProfile()),
 		glamour.WithWordWrap(max(1, width-2)),
 		glamour.WithPreservedNewLines(),
@@ -51,6 +53,34 @@ func markdownLines(body string, width int) []string {
 		}
 	}
 	return result
+}
+
+func markdownThemeStyles() glamouransi.StyleConfig {
+	style := glamourstyles.DarkStyleConfig
+	color := func(value string) *string { return &value }
+	style.Document.Color = color(activeTheme.text)
+	style.Heading.Color = color(activeTheme.accent)
+	style.H1.Color, style.H1.BackgroundColor = color(activeTheme.accent), nil
+	style.H2.Color, style.H3.Color = color(activeTheme.accent), color(activeTheme.accent)
+	style.H4.Color, style.H5.Color, style.H6.Color = color(activeTheme.accent), color(activeTheme.accent), color(activeTheme.accent)
+	style.Link.Color = color(activeTheme.brand)
+	style.LinkText.Color = color(activeTheme.accent)
+	style.Code.Color = color(activeTheme.codeString)
+	style.Code.BackgroundColor = color(activeTheme.fileBackground)
+	style.CodeBlock.Color = color(activeTheme.muted)
+	if style.CodeBlock.Chroma != nil {
+		chroma := *style.CodeBlock.Chroma
+		chroma.Text.Color = color(activeTheme.text)
+		chroma.Keyword.Color = color(activeTheme.keyword)
+		chroma.Comment.Color = color(activeTheme.comment)
+		chroma.LiteralNumber.Color = color(activeTheme.number)
+		chroma.LiteralString.Color = color(activeTheme.codeString)
+		chroma.GenericInserted.Color = color(activeTheme.addedText)
+		chroma.GenericDeleted.Color = color(activeTheme.deletedText)
+		chroma.Background.BackgroundColor = color(activeTheme.fileBackground)
+		style.CodeBlock.Chroma = &chroma
+	}
+	return style
 }
 
 func previewMarkdown(body string, width int) []string {

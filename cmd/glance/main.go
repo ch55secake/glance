@@ -15,6 +15,12 @@ func main() {
 }
 
 func run() error {
-	_, err := tea.NewProgram(initialModel(), tea.WithAltScreen()).Run()
+	m := initialModel()
+	if themeID, configErr := loadThemePreference(); configErr != nil {
+		m.themeConfigError = safeText(configErr.Error())
+	} else {
+		m.theme = applyTheme(themeID)
+	}
+	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
