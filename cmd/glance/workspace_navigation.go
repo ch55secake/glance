@@ -59,22 +59,46 @@ func (m model) workspaceHeight() int {
 }
 
 func workspaceWidths(width int) (rail, preview int) {
-	rail = min(38, max(26, width/3))
-	return rail, max(1, width-rail-4)
+	rail = min(48, max(30, width*2/5))
+	return rail, max(1, width-rail-6) // gutter and preview border/padding
 }
 
 func (m model) inboxPageSize() int {
 	if m.hasInboxPreview() {
-		return max(1, (m.workspaceHeight()-2)/2)
+		return max(1, (m.workspaceHeight()-2)/m.inboxItemHeight())
 	}
 	return m.visibleListCount()
 }
 
 func (m model) inboxPreviewHeight() int {
-	return max(1, m.workspaceHeight()-3) // heading, breathing room, position cue
+	return max(1, m.workspaceHeight()-2) // panel heading and position cue
+}
+
+func (m model) inboxItemHeight() int {
+	if m.height >= 24 {
+		return 3
+	}
+	return 2
 }
 
 func (m model) inboxPreviewLines(width int) []string {
+	if m.inboxLines != nil && m.inboxLinesKey == m.inboxSelectionKey() && m.inboxLinesWidth == width {
+		return m.inboxLines
+	}
+	return m.renderInboxPreview(width)
+}
+
+func (m *model) cacheInboxPreview() {
+	_, width := workspaceWidths(max(1, m.width-4))
+	key := m.inboxSelectionKey()
+	if m.inboxLines != nil && m.inboxLinesKey == key && m.inboxLinesWidth == width {
+		return
+	}
+	m.inboxLines = m.renderInboxPreview(width)
+	m.inboxLinesKey, m.inboxLinesWidth = key, width
+}
+
+func (m model) renderInboxPreview(width int) []string {
 	switch m.activeSection {
 	case 0:
 		if m.selectedPR >= 0 && m.selectedPR < len(m.pullRequests) {

@@ -36,6 +36,9 @@ type model struct {
 	selectedNotification int
 	inboxPreviewFocus    bool
 	inboxPreviewScroll   int
+	inboxLines           []string
+	inboxLinesKey        string
+	inboxLinesWidth      int
 	query                string
 	searchDraft          string
 	searchCursor         int
@@ -57,6 +60,11 @@ type model struct {
 	detailScroll         int
 	detailLines          []string
 	detailLinesWidth     int
+	reviewFiles          []reviewFileAnchor
+	reviewedFiles        map[string]githubapi.PullRequestFile
+	filePickerOpen       bool
+	filePickerQuery      string
+	filePickerSelection  int
 	sidebarScroll        int
 	sidebarFocus         bool
 	prDetails            githubapi.PullRequestDetails
@@ -194,6 +202,9 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	m.mergeInProgress = false
 	m.detailScroll = 0
 	m.detailLines = nil
+	m.reviewFiles = nil
+	m.reviewedFiles = nil
+	m.filePickerOpen = false
 	m.sidebarScroll = 0
 	m.sidebarFocus = false
 	m.diffLoading = true
@@ -313,6 +324,7 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	m.cacheDetailLines()
 	switch key {
 	case "esc":
 		m.detailOpen = false
@@ -325,6 +337,16 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.switchSection(section - 1)
 	case "/":
 		m.beginSearch()
+	case "f":
+		m.openFilePicker()
+	case "]":
+		m.stepReviewFile(1)
+	case "[":
+		m.stepReviewFile(-1)
+	case "d":
+		m.jumpToReviewFile(0)
+	case "v":
+		m.toggleReviewedFile()
 	case "up", "k":
 		if m.sidebarFocus {
 			m.sidebarScroll = max(0, m.sidebarScroll-1)
@@ -411,7 +433,11 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) maxDetailScroll() int {
 	visible := m.detailViewportHeight()
 	left, _ := m.reviewWidths(max(1, m.width-4))
-	return max(0, len(m.pullRequestDetailsView(left))-visible)
+	lastFile := 0
+	if len(m.reviewFiles) > 0 {
+		lastFile = m.reviewFiles[len(m.reviewFiles)-1].row
+	}
+	return max(lastFile, len(m.pullRequestDetailsView(left))-visible, 0)
 }
 
 // cacheDetailLines does the expensive Markdown and syntax highlighting only
@@ -424,7 +450,8 @@ func (m *model) cacheDetailLines() {
 	if m.detailLines != nil && m.detailLinesWidth == width {
 		return
 	}
-	m.detailLines = m.renderPullRequestDetails(width)
+	document := m.renderReview(width)
+	m.detailLines, m.reviewFiles = document.lines, document.files
 	m.detailLinesWidth = width
 }
 
@@ -438,6 +465,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next := updated.(model)
 	if selection != next.inboxSelectionKey() {
 		next.inboxPreviewScroll = 0
+		next.inboxLines = nil
+	}
+	if _, key := msg.(tea.KeyMsg); !key {
+		next.inboxLines = nil
+	}
+	if next.hasInboxPreview() && !next.detailOpen && !next.paletteOpen && !next.showHelp {
+		next.cacheInboxPreview()
 	}
 	if !next.hasInboxPreview() {
 		next.inboxPreviewFocus = false
@@ -454,6 +488,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		file, offset := m.reviewPosition()
 		m.width = msg.Width
 		m.height = msg.Height
 		if m.searching {
@@ -461,6 +496,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.detailOpen {
 			m.cacheDetailLines()
+			m.restoreReviewPosition(file, offset)
 		}
 		if !m.hasReviewSidebar() {
 			m.sidebarFocus = false
@@ -549,11 +585,14 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.requestID != m.detailRequestID || msg.key != m.detailKey {
 			break
 		}
+		file, offset := m.reviewPosition()
 		m.detailLoading = false
 		if msg.err != nil {
 			m.detailError = safeText(msg.err.Error())
 			m.detailLines = nil
 			m.cacheDetailLines()
+			m.restoreReviewPosition(file, offset)
+			m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
 			break
 		}
 		m.prDetails = msg.details
@@ -561,6 +600,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailError = ""
 		m.detailLines = nil
 		m.cacheDetailLines()
+		m.restoreReviewPosition(file, offset)
 		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
 		m.sidebarScroll = min(m.sidebarScroll, m.maxSidebarScroll())
 	case pullRequestFilesLoadedMsg:
@@ -575,6 +615,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cacheDetailLines()
 			break
 		}
+		m.retainViewedFiles(msg.files)
 		m.diffFiles = msg.files
 		m.diffLoaded = true
 		m.diffError = ""
@@ -602,6 +643,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cacheDetailLines()
 		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
 	case tea.KeyMsg:
+		if m.filePickerOpen {
+			return m.updateFilePickerKey(msg)
+		}
 		if m.paletteOpen {
 			return m.updatePaletteKey(msg)
 		}
@@ -621,14 +665,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if query == "" {
 					query = defaultPRQuery
 				}
-				if query != m.query {
-					m.query = query
-					m.prRequestID++
-					m.prLoading = true
-					m.apiError = ""
-					m.clearPRPreviews()
-					return m, m.searchPullRequests()
-				}
+				cmd := m.applyPRQuery(query)
+				return m, cmd
 			case "backspace", "ctrl+h":
 				m.deleteSearchRune(true)
 			case "delete":

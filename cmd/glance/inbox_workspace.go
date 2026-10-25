@@ -13,19 +13,24 @@ import (
 type workspaceItem struct {
 	title   string
 	context string
+	meta    string
 }
 
 func (m model) pullRequestWorkspace(items []githubapi.PullRequest, width int) []string {
 	selected := min(max(0, m.selectedPR), len(items)-1)
 	railWidth, _ := workspaceWidths(width)
-	railTextWidth := railWidth - 2
+	railTextWidth := railWidth - 6
 	rail := make([]workspaceItem, 0, len(items))
 	for _, pr := range items {
 		state := ""
 		if pr.Draft {
 			state = "  ◆"
 		}
-		rail = append(rail, workspaceItem{safeText(pr.Title), workspaceReference(pr.Repository, pr.Number, railTextWidth-lipgloss.Width(state)) + state})
+		meta := "@" + safeText(pr.User.Login) + " · " + relativeTime(pr.UpdatedAt)
+		if details, ok := m.previewCache[fmt.Sprintf("%s#%d", pr.Repository, pr.Number)]; ok {
+			meta = checkSummary(details)
+		}
+		rail = append(rail, workspaceItem{safeText(pr.Title), workspaceReference(pr.Repository, pr.Number, railTextWidth-lipgloss.Width(state)) + state, meta})
 	}
 	return m.workspace(width, rail, selected)
 }
@@ -66,22 +71,7 @@ func (m model) prPreviewContext(key string, width int) []string {
 			style = errorStyle
 		}
 	}
-	pass, fail, running := 0, 0, 0
-	for _, check := range details.CheckRuns {
-		switch check.Conclusion {
-		case "success", "neutral", "skipped":
-			pass++
-		case "failure", "timed_out", "action_required", "cancelled", "startup_failure", "stale":
-			fail++
-		default:
-			running++
-		}
-	}
-	checks := fmt.Sprintf("checks ✓%d ✕%d ◌%d", pass, fail, running)
-	if details.ChecksError != "" {
-		checks = "checks unavailable"
-	}
-	lines = append(lines, style.Render(clipLine(mergeability+"  ·  "+checks, width)))
+	lines = append(lines, style.Render(clipLine(mergeability, width)), textStyle.Render(clipLine(checkSummary(details), width)))
 	status := fmt.Sprintf("Reviews  %d  ·  requested  %d", len(details.Reviews), len(details.RequestedReviewers))
 	if details.ReviewsError != "" {
 		status = "Reviews unavailable"
@@ -95,9 +85,7 @@ func (m model) prPreviewContext(key string, width int) []string {
 	if strings.TrimSpace(body) == "" {
 		body = "No description provided."
 	}
-	for _, part := range previewDescriptionLines(body, width) {
-		lines = append(lines, textStyle.Render(part))
-	}
+	lines = append(lines, previewMarkdown(body, width)...)
 	if len(details.CheckRuns) > 0 {
 		lines = append(lines, "", accentStyle.Render("CHECKS"))
 		for _, check := range details.CheckRuns {
@@ -151,26 +139,13 @@ func wrapPreviewWords(text string, width int) []string {
 	return lines
 }
 
-// Preserve authored line breaks while wrapping each individual line to the pane.
-func previewDescriptionLines(body string, width int) []string {
-	var lines []string
-	for _, line := range strings.Split(body, "\n") {
-		if strings.TrimSpace(line) == "" {
-			lines = append(lines, "")
-			continue
-		}
-		lines = append(lines, wrapPreviewWords(line, width)...)
-	}
-	return lines
-}
-
 func (m model) issueWorkspace(width int) []string {
 	selected := min(max(0, m.selectedIssue), len(m.issues)-1)
 	railWidth, _ := workspaceWidths(width)
-	railTextWidth := railWidth - 2
+	railTextWidth := railWidth - 6
 	rail := make([]workspaceItem, 0, len(m.issues))
 	for _, issue := range m.issues {
-		rail = append(rail, workspaceItem{safeText(issue.Title), workspaceReference(issue.Repository, issue.Number, railTextWidth)})
+		rail = append(rail, workspaceItem{safeText(issue.Title), workspaceReference(issue.Repository, issue.Number, railTextWidth), fmt.Sprintf("%d comments · %s", issue.Comments, relativeTime(issue.UpdatedAt))})
 	}
 	return m.workspace(width, rail, selected)
 }
@@ -194,9 +169,7 @@ func issuePreview(issue githubapi.Issue, width int) []string {
 	if strings.TrimSpace(body) == "" {
 		body = "No description provided."
 	}
-	for _, part := range previewDescriptionLines(body, width) {
-		lines = append(lines, textStyle.Render(part))
-	}
+	lines = append(lines, previewMarkdown(body, width)...)
 	return lines
 }
 
@@ -208,7 +181,7 @@ func (m model) notificationWorkspace(width int) []string {
 		if notification.Unread {
 			marker = "● "
 		}
-		rail = append(rail, workspaceItem{marker + safeText(notification.Subject.Title), safeText(notification.Repository.FullName)})
+		rail = append(rail, workspaceItem{marker + safeText(notification.Subject.Title), safeText(notification.Repository.FullName), notificationReason(notification.Reason)})
 	}
 	return m.workspace(width, rail, selected)
 }
@@ -277,66 +250,36 @@ func (m model) workspace(width int, items []workspaceItem, selected int) []strin
 	start := min(max(0, selected-visible/2), len(items)-visible)
 	preview := m.inboxPreviewLines(previewWidth)
 	previewStart := min(max(0, m.inboxPreviewScroll), max(0, len(preview)-m.inboxPreviewHeight()))
-	right := []string{paneHeading(fmt.Sprintf("SELECTED  %d / %d", selected+1, len(items)), previewWidth, m.inboxPreviewFocus), ""}
-	right = append(right, preview[previewStart:min(len(preview), previewStart+m.inboxPreviewHeight())]...)
-	lines := make([]string, 0, height)
-	for row := 0; row < height; row++ {
-		left := ""
-		switch {
-		case row == 0:
-			left = paneHeading(fmt.Sprintf("INBOX  %d–%d", start+1, start+visible), railWidth, !m.inboxPreviewFocus && !m.searching)
-		case row <= 2*visible:
-			index := start + (row-1)/2
-			item := items[index]
-			selectedRow := index == selected
-			marker := "  "
-			if selectedRow {
-				marker = "▸ "
-				if row%2 == 0 {
-					marker = "▎ "
+	var rail []string
+	for i := start; i < start+visible; i++ {
+		item := items[i]
+		values := []string{item.title, item.context, item.meta}
+		for row, value := range values[:m.inboxItemHeight()] {
+			marker, style := "  ", mutedStyle
+			if row == 0 {
+				style = textStyle.Bold(true)
+			}
+			if i == selected {
+				marker = "▎ "
+				if row == 0 {
+					marker = "▸ "
 				}
+				style = selectedStyle.Bold(row == 0)
 			}
-			value := item.title
-			style := textStyle
-			if row%2 == 0 {
-				value = item.context
-				style = mutedStyle
-			}
-			value = marker + clipLine(value, railWidth-2)
-			if selectedRow {
-				style = selectedStyle
-				if row%2 == 1 {
-					style = style.Bold(true)
-				}
-			}
-			left = style.Width(railWidth).Render(value)
+			rail = append(rail, style.Width(railWidth-4).Render(marker+clipLine(value, railWidth-6)))
 		}
-		if row == height-1 {
-			left = mutedStyle.Render(clipLine(fmt.Sprintf("%d of %d  ·  ↑/↓ browse", selected+1, len(items)), railWidth))
-		}
-		part := ""
-		if row < len(right) {
-			part = right[row]
-		}
-		if row == height-1 {
-			hint := "tab preview"
-			if m.inboxPreviewFocus {
-				hint = "esc list"
-			}
-			part = alignStyled(hint, scrollPosition(previewStart, m.inboxPreviewHeight(), len(preview)), previewWidth, accentStyle, mutedStyle)
-		}
-		border := mutedStyle
-		if m.inboxPreviewFocus {
-			border = accentStyle
-		}
-		lines = append(lines, "  "+lipgloss.NewStyle().Width(railWidth).Render(left)+"  "+border.Render("│ ")+part)
+	}
+	left := panel(railWidth, height, fmt.Sprintf("INBOX  %d–%d", start+1, start+visible), fmt.Sprintf("%d of %d · ↑/↓ browse", selected+1, len(items)), rail, !m.inboxPreviewFocus && !m.searching)
+	hint := "tab preview"
+	if m.inboxPreviewFocus {
+		hint = "esc list"
+	}
+	status := hint + " · " + scrollPosition(previewStart, m.inboxPreviewHeight(), len(preview))
+	right := panel(previewWidth+4, height, fmt.Sprintf("SELECTED  %d / %d", selected+1, len(items)), status,
+		preview[previewStart:min(len(preview), previewStart+m.inboxPreviewHeight())], m.inboxPreviewFocus && !m.searching)
+	lines := make([]string, height)
+	for row := range lines {
+		lines[row] = "  " + left[row] + "  " + right[row]
 	}
 	return lines
-}
-
-func paneHeading(label string, width int, focused bool) string {
-	if focused {
-		return activeStyle.Width(width).Render(clipLine("▎ "+label, width))
-	}
-	return mutedStyle.Render(clipLine("  "+label, width))
 }

@@ -29,10 +29,10 @@ make run
 
 ### Finding your way around
 
-glance opens directly to Pull requests. On wider terminals, each inbox has a
-compact selection rail beside a preview; narrow terminals use a single column.
-The active pane has a highlighted heading and a marker that also works without
-color. Shortcut hints stay pinned at the bottom.
+glance opens directly to Pull requests. On wider terminals, framed inbox and
+preview panes show the selection, focus, and scroll position. Roomier inboxes
+include author/activity details and cached check summaries alongside each item.
+Narrow terminals use a single column. Shortcut hints stay pinned at the bottom.
 
 | Key | Action |
 | --- | --- |
@@ -49,18 +49,23 @@ color. Shortcut hints stay pinned at the bottom.
 
 The palette matches words in command names and descriptions. Use up/down,
 `tab`/`shift+tab`, or `ctrl+n`/`ctrl+p` to select a command, `enter` to run it,
-and `esc` to return to the same position. It also shows each command's shortcut.
+and `esc` to return to the same position. Command and file pickers overlay the
+dimmed workspace, keeping your context visible. The palette also shows each
+command's shortcut.
 
 The selected PR's description, mergeability, checks, and review activity load
 after a short pause and are cached while browsing. Focus its preview to scroll
-through the full content. Issues include descriptions, labels, and comment
-counts; notifications explain why each thread is in your inbox.
+through the full content. PR and issue descriptions render Markdown, including
+lists and code, while preserving authored line breaks. Issues include labels
+and comment counts; notifications explain why each thread is in your inbox.
 
 ### GitHub filters
 
 The PR inbox defaults to `is:pr is:open author:@me`. Press `/` to edit it using
 GitHub search qualifiers (for example, `repo:owner/name is:open`), `enter` to
 apply, or `esc` to cancel. Editing only fetches results when you submit.
+The command palette includes **My pull requests**, **Needs my review**, and
+**All open pull requests** for switching directly between common GitHub queries.
 
 Use left/right to move the cursor, Home/End or `ctrl+a`/`ctrl+e` to jump to an
 edge, and `ctrl+left`/`ctrl+right` or `alt+b`/`alt+f` to move by a word.
@@ -75,7 +80,22 @@ Use up/down or `j`/`k` to scroll through the details and diff, `PgUp`/`PgDn` to 
 screen, and `esc` to return to the same inbox position. Diff additions,
 deletions, hunks, old/new line numbers, and recognized source code are highlighted;
 long lines wrap. PR descriptions render as Markdown, including lists and fenced
-code. On wide terminals, mergeability, checks, and review activity are in a
+code. A sticky file header keeps the current path visible as you scroll.
+
+| Key | Review navigation |
+| --- | --- |
+| `f` | Search changed paths, including previous names of renamed files |
+| `enter` in the file picker | Jump directly to that file's patch |
+| `[` / `]` | Previous / next changed file |
+| `d` | Jump to the first file in the diff |
+| `v` | Toggle the current file as viewed locally |
+
+The file picker shows change counts and viewed markers, including files whose
+patches GitHub cannot provide. Viewed progress belongs to the current review;
+it clears for changed or removed files on refresh and when opening a PR anew.
+These markers are local navigation aids and are not submitted to GitHub.
+
+On wide terminals, mergeability, checks, and review activity are in a
 right-hand panel; press `tab` to focus it and use `j`/`k` or `PgUp`/`PgDn` to
 scroll it independently. The active pane is highlighted without a focus label.
 On narrow terminals, checks and reviews appear below the diff. Merge and

@@ -42,24 +42,32 @@ func (m model) View() string {
 	if m.width < 30 || m.height < 10 {
 		return m.smallTerminalView()
 	}
+	if m.paletteOpen || m.filePickerOpen {
+		return m.modalView()
+	}
 	width := max(1, m.width)
 	inner := max(1, width-4)
+	if m.detailOpen {
+		m.cacheDetailLines()
+	}
+	location := ""
+	if m.detailOpen && !m.showHelp && !m.paletteOpen && !m.filePickerOpen {
+		location = m.reviewLocation(inner)
+	}
 	lines := []string{
 		m.header(inner),
 		m.navigation(inner),
-		"",
+		location,
 	}
 
 	switch {
-	case m.paletteOpen:
-		lines = append(lines, m.paletteView(inner)...)
 	case m.showHelp:
 		lines = append(lines, m.helpView(inner)...)
 	case m.detailOpen:
 		leftWidth, rightWidth := m.reviewWidths(inner)
 		content := m.pullRequestDetailsView(leftWidth)
 		visible := m.detailViewportHeight()
-		start := min(max(0, m.detailScroll), max(0, len(content)-visible))
+		start := min(max(0, m.detailScroll), m.maxDetailScroll())
 		end := min(len(content), start+visible)
 		if rightWidth > 0 {
 			sidebar := m.reviewSidebar(rightWidth, visible)
@@ -76,6 +84,9 @@ func (m model) View() string {
 			}
 		} else {
 			lines = append(lines, content[start:end]...)
+			for i := end - start; i < visible; i++ {
+				lines = append(lines, "")
+			}
 		}
 		lines = append(lines, m.mergeActionPanel(inner)...)
 	case m.activeSection == 0:
@@ -88,7 +99,7 @@ func (m model) View() string {
 		lines = append(lines, m.placeholderView(inner)...)
 	}
 
-	if !m.detailOpen || m.showHelp || m.paletteOpen {
+	if !m.detailOpen || m.showHelp || m.paletteOpen || m.filePickerOpen {
 		// Keep controls at the bottom as lists, empty states, and errors change size.
 		for len(lines) < m.height-2 {
 			lines = append(lines, "")
@@ -142,11 +153,11 @@ func (m model) navigation(width int) string {
 	if m.detailOpen {
 		left := "  ← Pull requests  /  " + safeText(m.detailKey)
 		style := mutedStyle
-		if !m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp && !m.paletteOpen {
+		if !m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp && !m.paletteOpen && !m.filePickerOpen {
 			left = "▎ ← Pull requests  /  " + safeText(m.detailKey)
 			style = activeStyle
 		}
-		if width >= 55 && !m.paletteOpen && !m.showHelp {
+		if width >= 55 && !m.paletteOpen && !m.showHelp && !m.filePickerOpen {
 			leftWidth, _ := m.reviewWidths(width)
 			total := len(m.pullRequestDetailsView(leftWidth))
 			progress := fmt.Sprintf("%d–%d / %d", min(m.detailScroll+1, total), min(m.detailScroll+m.detailViewportHeight(), total), total)
@@ -329,10 +340,7 @@ func (m model) helpView(width int) []string {
 
 func (m model) pullRequestView(width int) []string {
 	items := m.pullRequests
-	lines := make([]string, 0, 3)
-	for _, line := range m.githubFilterBox(width) {
-		lines = append(lines, "  "+line)
-	}
+	lines := m.pullRequestToolbar(width)
 	if (m.prLoading || m.loading && m.prRequestID == 0) && len(m.pullRequests) == 0 {
 		return append(lines, m.message(width, "Loading", "Searching GitHub for pull requests...", "This can take a moment.")...)
 	}
@@ -368,6 +376,10 @@ func (m model) pullRequestDetailsView(width int) []string {
 }
 
 func (m model) renderPullRequestDetails(width int) []string {
+	return m.renderReview(width).lines
+}
+
+func (m model) renderReview(width int) reviewDocument {
 	if m.prDetails.Number == 0 {
 		var lines []string
 		if m.detailLoading {
@@ -377,7 +389,7 @@ func (m model) renderPullRequestDetails(width int) []string {
 		} else {
 			lines = m.message(width, "Pull request unavailable", "No pull request details are loaded.", "Press r to try again, or esc to return.")
 		}
-		return append(lines, m.pullRequestDiffLines(width)...)
+		return appendReviewDiff(lines, m.renderReviewDiff(width))
 	}
 	details := m.prDetails
 	state := openBadge.Render(" ● OPEN ")
@@ -411,14 +423,16 @@ func (m model) renderPullRequestDetails(width int) []string {
 	}
 	lines = append(lines, "", "  "+accentStyle.Render("▤ DESCRIPTION"))
 	lines = append(lines, markdownLines(details.Body, width)...)
-	lines = append(lines, m.pullRequestDiffLines(width)...)
+	document := appendReviewDiff(lines, m.renderReviewDiff(width))
+	lines = document.lines
 	if !m.hasReviewSidebar() {
 		lines = append(lines, "", "  "+accentStyle.Render(fmt.Sprintf("◉ CHECKS (%d)", len(details.CheckRuns))))
 		lines = append(lines, m.checkStatusLines(width)...)
 		lines = append(lines, "")
 		lines = append(lines, m.reviewActivityLines(width)...)
 	}
-	return lines
+	document.lines = lines
+	return document
 }
 
 func (m model) reviewActivityLines(width int) []string {
@@ -580,7 +594,7 @@ func (m model) reviewSidebar(width, height int) []string {
 	inner := max(1, width-2)
 	heading := "  ◈ READINESS"
 	headingStyle := accentStyle
-	if m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp && !m.paletteOpen {
+	if m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp && !m.paletteOpen && !m.filePickerOpen {
 		heading = "▎ ◈ READINESS"
 		headingStyle = activeStyle
 	}
@@ -639,15 +653,15 @@ func (m model) mergeActionPanel(width int) []string {
 		return lines
 	default:
 		actions := "◆ ACTIONS  ·  m merge  ·  r refresh  ·  esc back"
-		guidance := "↑/↓ or j/k scroll  ·  PgUp/PgDn page  ·  ? help"
+		guidance := "f files  ·  [/] jump  ·  v viewed  ·  ↑/↓ scroll  ·  ? help"
 		if width < 45 {
 			actions = "◆ ACTIONS  ·  m merge"
-			guidance = "esc back  ·  r refresh  ·  ↑/↓"
+			guidance = "esc back  ·  f files"
 		} else if width < 70 {
 			actions = "◆ ACTIONS  ·  m merge  ·  esc back"
-			guidance = "r refresh  ·  ↑/↓ scroll  ·  PgUp/PgDn"
+			guidance = "f files  ·  [/] jump  ·  v viewed"
 		} else if m.hasReviewSidebar() {
-			guidance = "tab switch pane  ·  ↑/↓ scroll  ·  PgUp/PgDn page  ·  ? help"
+			guidance = "f files  ·  [/] jump  ·  v viewed  ·  tab switch pane  ·  PgUp/PgDn page  ·  ? help"
 		}
 		if width >= 70 {
 			actions += "  ·  : commands"
@@ -675,21 +689,25 @@ func panelMessage(message string, width int, style lipgloss.Style) []string {
 }
 
 func (m model) pullRequestDiffLines(width int) []string {
+	return m.renderReviewDiff(width).lines
+}
+
+func (m model) renderReviewDiff(width int) reviewDocument {
 	lines := []string{"", "  " + accentStyle.Render("▥ CHANGED FILES")}
 	if m.diffLoading && !m.diffLoaded {
-		return append(lines, "  "+warnStyle.Render("Loading changed files and patches from GitHub…"))
+		return reviewDocument{lines: append(lines, "  "+warnStyle.Render("Loading changed files and patches from GitHub…"))}
 	}
 	if m.diffError != "" {
 		lines = append(lines, "  "+errorStyle.Render(clipLine("Could not load diff: "+m.diffError, width)))
 		if !m.diffLoaded || len(m.diffFiles) == 0 {
-			return lines
+			return reviewDocument{lines: lines}
 		}
 	}
 	if !m.diffLoaded {
-		return append(lines, "  "+mutedStyle.Render("Changed files have not loaded yet."))
+		return reviewDocument{lines: append(lines, "  "+mutedStyle.Render("Changed files have not loaded yet."))}
 	}
 	if len(m.diffFiles) == 0 {
-		return append(lines, "  "+mutedStyle.Render("No changed files."))
+		return reviewDocument{lines: append(lines, "  "+mutedStyle.Render("No changed files."))}
 	}
 	additions, deletions := 0, 0
 	for _, file := range m.diffFiles {
@@ -701,10 +719,12 @@ func (m model) pullRequestDiffLines(width int) []string {
 		fileLabel = "file"
 	}
 	lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("%d %s changed  ·  +%d −%d", len(m.diffFiles), fileLabel, additions, deletions), width)))
+	var files []reviewFileAnchor
 	for i, file := range m.diffFiles {
 		if i > 0 {
 			lines = append(lines, "")
 		}
+		start := len(lines)
 		path := safeText(file.Filename)
 		if file.PreviousFilename != "" && file.PreviousFilename != file.Filename {
 			path = safeText(file.PreviousFilename) + " → " + path
@@ -719,11 +739,12 @@ func (m model) pullRequestDiffLines(width int) []string {
 		lines = append(lines, "  "+mutedStyle.Render(clipLine(fmt.Sprintf("File %d/%d  ·  %s  ·  +%d −%d", i+1, len(m.diffFiles), safeText(file.Status), file.Additions, file.Deletions), width)))
 		if file.Patch == "" {
 			lines = append(lines, "  "+mutedStyle.Render(clipLine("GitHub did not provide a patch (binary or too large).", width)))
-			continue
+		} else {
+			lines = append(lines, renderFilePatch(file.Patch, file.Filename, width)...)
 		}
-		lines = append(lines, renderFilePatch(file.Patch, file.Filename, width)...)
+		files = append(files, reviewFileAnchor{index: i, row: start, end: len(lines)})
 	}
-	return lines
+	return reviewDocument{lines: lines, files: files}
 }
 
 // renderPatch keeps unified-diff line numbers intact while wrapping long code
@@ -959,6 +980,8 @@ func (m model) message(width int, title, detail, hint string) []string {
 func (m model) footer(width int) string {
 	var hints []shortcut
 	switch {
+	case m.filePickerOpen:
+		hints = []shortcut{{"enter", "jump"}, {"esc", "close"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
 	case m.paletteOpen:
 		hints = []shortcut{{"enter", "run"}, {"esc", "close"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
 	case m.searching:
@@ -972,7 +995,7 @@ func (m model) footer(width int) string {
 	default:
 		hints = []shortcut{{"↑/↓", "select"}, {"?", "help"}, {":", "commands"}}
 	}
-	if !m.paletteOpen && !m.searching && !m.showHelp {
+	if !m.paletteOpen && !m.filePickerOpen && !m.searching && !m.showHelp {
 		if m.hasInboxPreview() && !m.inboxPreviewFocus {
 			hints = append(hints, shortcut{"tab", "preview"})
 		}

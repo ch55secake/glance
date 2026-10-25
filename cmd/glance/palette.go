@@ -40,8 +40,17 @@ func (m model) paletteActions() []paletteAction {
 		}
 	}
 	if m.detailOpen {
-		actions = append(actions, paletteAction{"Back to inbox", "Return to your selection", "esc", func(m *model) tea.Cmd { m.detailOpen = false; return m.schedulePRPreview() }})
+		actions = append(actions,
+			paletteAction{"Find changed file", "Search paths and jump straight to a patch", "f", func(m *model) tea.Cmd { m.openFilePicker(); return nil }},
+			paletteAction{"Jump to diff", "Start reading the first changed file", "d", func(m *model) tea.Cmd { m.jumpToReviewFile(0); return nil }},
+			paletteAction{"Back to inbox", "Return to your selection", "esc", func(m *model) tea.Cmd { m.detailOpen = false; return m.schedulePRPreview() }},
+		)
 	}
+	actions = append(actions,
+		paletteAction{"My pull requests", "Show open PRs authored by you", "", func(m *model) tea.Cmd { return m.applyPRQuery(defaultPRQuery) }},
+		paletteAction{"Needs my review", "Show PRs requesting your review", "", func(m *model) tea.Cmd { return m.applyPRQuery(reviewRequestedQuery) }},
+		paletteAction{"All open pull requests", "Show open PRs across repositories", "", func(m *model) tea.Cmd { return m.applyPRQuery(allOpenQuery) }},
+	)
 	return append(actions,
 		paletteAction{"Help", "Show keyboard shortcuts", "?", func(m *model) tea.Cmd { m.showHelp = true; m.helpScroll = 0; return nil }},
 		paletteAction{"Quit", "Exit glance", "q", func(*model) tea.Cmd { return tea.Quit }},

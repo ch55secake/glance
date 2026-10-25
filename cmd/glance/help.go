@@ -25,6 +25,8 @@ func (m model) helpContent(width int) []string {
 		groups = append(groups, group{"PR REVIEW", []shortcut{
 			{"↑/↓ · j/k", "Scroll the active pane"}, {"tab / shift+tab", "Switch between diff and readiness"},
 			{"PgUp / PgDn", "Scroll a screen"}, {"Home / End", "Jump to the first or last line"},
+			{"f", "Find a changed file by path"}, {"[ / ]", "Jump to the previous / next file"},
+			{"d", "Jump straight to the diff"}, {"v", "Toggle viewed for the current file (local)"},
 			{"m", "Choose a merge method, then confirm"}, {"/", "Return to editing the GitHub filter"}, {"esc", "Return to the inbox"},
 		}})
 	} else {

@@ -69,9 +69,11 @@ func (m *model) storePRPreview(key string, details githubapi.PullRequestDetails)
 		m.previewOrder = append(m.previewOrder, key)
 	}
 	m.previewCache[key] = details
+	m.inboxLines = nil
 }
 
 func (m *model) clearPRPreviews() {
+	m.inboxLines = nil
 	m.previewEpoch++
 	m.previewCache = nil
 	m.previewErrors = nil

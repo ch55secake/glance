@@ -1138,7 +1138,7 @@ func TestDashboardLayoutsStayWithinTerminal(t *testing.T) {
 	}
 }
 
-func TestInboxLayoutUsesWhitespaceAndTitleFirst(t *testing.T) {
+func TestInboxLayoutFramesPanesAndKeepsTitleFirst(t *testing.T) {
 	for _, width := range []int{30, 80, 120} {
 		m := initialModel()
 		m.width, m.height = width, 24
@@ -1159,14 +1159,14 @@ func TestInboxLayoutUsesWhitespaceAndTitleFirst(t *testing.T) {
 			m.activeSection = tc.section
 			lines := strings.Split(m.View(), "\n")
 			for _, line := range lines {
-				if strings.Contains(line, "─") {
-					if tc.section == 0 && (strings.Contains(line, "╭") || strings.Contains(line, "╰")) && lipgloss.Width(line) <= min(width, 68)+2 {
-						continue
-					}
-					t.Errorf("section %d at width %d has a horizontal divider: %q", tc.section, width, line)
+				if lipgloss.Width(line) > width {
+					t.Errorf("section %d at width %d overflows its pane: %q", tc.section, width, line)
 				}
 			}
 			view := strings.Join(lines, "\n")
+			if width >= 80 && (!strings.Contains(view, "╭─ ▎ INBOX") || !strings.Contains(view, "╭─ SELECTED")) {
+				t.Errorf("section %d at width %d lost framed list and preview: %s", tc.section, width, view)
+			}
 			if title, context := strings.Index(view, tc.title), strings.Index(view, tc.context); title < 0 || context < title {
 				t.Errorf("section %d at width %d does not show title before context: %s", tc.section, width, view)
 			}
