@@ -847,7 +847,7 @@ func safeMultiline(text string) string {
 func (m model) githubFilterBox(width int) []string {
 	value := m.query
 	if m.searching {
-		value = m.searchDraft + "▌"
+		value = m.searchDraft
 	}
 	if width < 12 {
 		return []string{accentStyle.Render(clipLine("⌕ "+safeText(value), width))}
@@ -856,7 +856,9 @@ func (m model) githubFilterBox(width int) []string {
 	inputWidth := boxWidth - 2
 	value = safeText(value)
 	available := inputWidth - lipgloss.Width(" ⌕ ") - 1
-	if lipgloss.Width(value) > available {
+	if m.searching {
+		value = searchViewport(value, m.searchCursor, m.searchOffset, available)
+	} else if lipgloss.Width(value) > available {
 		for lipgloss.Width(value) > available-1 && len(value) > 0 {
 			value = string([]rune(value)[1:])
 		}
@@ -963,7 +965,7 @@ func (m model) footer(width int) string {
 		}
 	}
 	if m.searching {
-		help = "GitHub filter   enter apply   esc cancel   ctrl+u clear"
+		help = "←/→ move   Home/End jump   Del erase   enter apply   esc cancel"
 	}
 	return "  " + mutedStyle.Render(clipLine(help, width))
 }
