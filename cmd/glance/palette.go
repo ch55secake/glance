@@ -28,6 +28,10 @@ func (m model) paletteActions() []paletteAction {
 			m.beginSearch()
 			return nil
 		}},
+		{"Switch theme", "Choose and save a color theme", "t", func(m *model) tea.Cmd {
+			m.openThemePicker()
+			return nil
+		}},
 	}
 	if !m.detailOpen && m.activeSection == 0 && len(m.pullRequests) > 0 {
 		actions = append(actions, paletteAction{"Review selected PR", "Open details and the continuous diff", "enter", func(m *model) tea.Cmd { return m.openSelectedPullRequest() }})
@@ -166,7 +170,7 @@ func (m model) paletteView(width int) []string {
 		}
 		content = append(content, "", mutedStyle.Render(clipLine(hint, inner)))
 	}
-	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#C9A7FF")).Padding(0, 1).Width(inner + 2).Render(strings.Join(content, "\n"))
+	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(themeAccentColor)).Padding(0, 1).Width(inner + 2).Render(strings.Join(content, "\n"))
 	margin := strings.Repeat(" ", 2+max(0, (width-cardWidth)/2))
 	lines := strings.Split(card, "\n")
 	for i := range lines {

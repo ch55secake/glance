@@ -23,6 +23,10 @@ type model struct {
 	width                int
 	height               int
 	activeSection        int
+	theme                string
+	themePickerOpen      bool
+	themePickerSelection int
+	themeConfigError     string
 	loading              bool
 	viewer               githubapi.User
 	apiError             string
@@ -140,7 +144,8 @@ const (
 )
 
 func initialModel() model {
-	return model{width: 80, height: 24, loading: true, query: defaultPRQuery, client: githubapi.NewClient()}
+	applyTheme(defaultThemeID)
+	return model{width: 80, height: 24, loading: true, query: defaultPRQuery, theme: defaultThemeID, client: githubapi.NewClient()}
 }
 
 func (m model) Init() tea.Cmd {
@@ -343,6 +348,8 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.switchSection(section - 1)
 	case "/":
 		m.beginSearch()
+	case "t":
+		m.openThemePicker()
 	case "f":
 		m.openFilePicker()
 	case "]":
@@ -664,6 +671,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cacheDetailLines()
 		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
 	case tea.KeyMsg:
+		if m.themePickerOpen {
+			return m.updateThemePickerKey(msg)
+		}
 		if m.filePickerOpen {
 			return m.updateFilePickerKey(msg)
 		}
@@ -795,6 +805,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.showHelp = true
 			m.helpScroll = 0
+		case "t":
+			m.openThemePicker()
 		case "/":
 			if m.activeSection == 0 {
 				m.beginSearch()

@@ -11,7 +11,7 @@ import (
 // Headings and position cues stay outside the scrollable content.
 func panel(width, height int, title, status string, content []string, focused bool) []string {
 	width, height = max(6, width), max(3, height)
-	border := lipgloss.NewStyle().Foreground(lipgloss.Color("#606889"))
+	border := lipgloss.NewStyle().Foreground(lipgloss.Color(themeBorderColor))
 	if focused {
 		border = accentStyle
 		title = "▎ " + title
@@ -38,7 +38,7 @@ func panel(width, height int, title, status string, content []string, focused bo
 // cuts preserve terminal cell positions even with wide glyphs at the card edge.
 func (m model) modalView() string {
 	background := m
-	background.paletteOpen, background.filePickerOpen = false, false
+	background.paletteOpen, background.filePickerOpen, background.themePickerOpen = false, false, false
 	lines := strings.Split(background.View(), "\n")
 	for len(lines) < m.height {
 		lines = append(lines, "")
@@ -49,7 +49,10 @@ func (m model) modalView() string {
 	width := m.width - 4
 	cardWidth := min(width, 72)
 	var card []string
-	if m.filePickerOpen {
+	if m.themePickerOpen {
+		cardWidth = min(width, 78)
+		card = m.themePickerView(width)
+	} else if m.filePickerOpen {
 		cardWidth = min(width, 100)
 		card = m.filePickerView(width)
 	} else {

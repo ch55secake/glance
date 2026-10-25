@@ -44,6 +44,7 @@ Narrow terminals use a single column. Shortcut hints stay pinned at the bottom.
 | `esc` | Return focus from the preview to the list |
 | `enter` | Open the selected PR's review and diff |
 | `:` | Search the command palette |
+| `t` | Open the theme switcher |
 | `?` | Open scrollable keyboard help, including during PR review |
 | `r` / `q` | Refresh / quit |
 
@@ -51,7 +52,10 @@ The palette matches words in command names and descriptions. Use up/down,
 `tab`/`shift+tab`, or `ctrl+n`/`ctrl+p` to select a command, `enter` to run it,
 and `esc` to return to the same position. Command and file pickers overlay the
 dimmed workspace, keeping your context visible. The palette also shows each
-command's shortcut.
+command's shortcut. Choose **Switch theme** to preview Midnight, Nord, Dracula,
+or Solarized; the selection takes effect immediately and is remembered for the
+next launch in `$XDG_CONFIG_HOME/glance/config.json` (default:
+`~/.config/glance/config.json`).
 
 The selected PR's description, mergeability, checks, and review activity load
 after a short pause and are cached while browsing. Focus its preview to scroll

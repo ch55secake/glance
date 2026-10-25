@@ -17,24 +17,7 @@ import (
 )
 
 var (
-	brandStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#82E9F0"))
-	accentStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#C9A7FF"))
-	textStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1F2F6"))
-	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#A1AAC4"))
-	goodStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#9AE8B8"))
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBD389"))
-	errorStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF959A"))
-	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("#343C57")).Foreground(lipgloss.Color("#F1F2F6"))
-	activeStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#7252AB"))
-	openBadge     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#B8F3CF")).Background(lipgloss.Color("#214D42"))
-	draftBadge    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFE2A6")).Background(lipgloss.Color("#61492A"))
-	mergedBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#D6C5FF")).Background(lipgloss.Color("#443460"))
-	unreadBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#D6C5FF")).Background(lipgloss.Color("#443460"))
-	addLineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#B8F3CF")).Background(lipgloss.Color("#183A34"))
-	delLineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB6B9")).Background(lipgloss.Color("#452B36"))
-	hunkLineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A7FF")).Background(lipgloss.Color("#302946"))
-	fileLineStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F1F2F6")).Background(lipgloss.Color("#343C57"))
-	hunkHeader    = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+	hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 )
 
 // View renders a fixed-height dashboard; the PR window moves with the selection.
@@ -42,7 +25,7 @@ func (m model) View() string {
 	if m.width < 30 || m.height < 10 {
 		return m.smallTerminalView()
 	}
-	if m.paletteOpen || m.filePickerOpen {
+	if m.paletteOpen || m.filePickerOpen || m.themePickerOpen {
 		return m.modalView()
 	}
 	width := max(1, m.width)
@@ -142,6 +125,9 @@ func (m model) header(width int) string {
 		if m.loading {
 			status = "↻ " + status
 		}
+	}
+	if m.themeConfigError != "" {
+		status, style = "CONFIG ERROR", warnStyle
 	}
 	if width < 35 {
 		return "  " + left
@@ -819,13 +805,13 @@ func highlightCode(code string, lexer chroma.Lexer, background lipgloss.Style) s
 		style := background
 		switch {
 		case token.Type.InCategory(chroma.Keyword):
-			style = style.Foreground(lipgloss.Color("#D6C5FF")).Bold(true)
+			style = style.Foreground(lipgloss.Color(syntaxKeyword)).Bold(true)
 		case token.Type.InCategory(chroma.LiteralString):
-			style = style.Foreground(lipgloss.Color("#FBD389"))
+			style = style.Foreground(lipgloss.Color(syntaxString))
 		case token.Type.InCategory(chroma.LiteralNumber):
-			style = style.Foreground(lipgloss.Color("#82E9F0"))
+			style = style.Foreground(lipgloss.Color(syntaxNumber))
 		case token.Type.InCategory(chroma.Comment):
-			style = style.Foreground(lipgloss.Color("#A1AAC4"))
+			style = style.Foreground(lipgloss.Color(syntaxComment))
 		}
 		result.WriteString(style.Render(token.Value))
 	}
@@ -897,7 +883,7 @@ func (m model) githubFilterBox(width int) []string {
 		}
 		value = "…" + value
 	}
-	border := lipgloss.NewStyle().Foreground(lipgloss.Color("#606889"))
+	border := lipgloss.NewStyle().Foreground(lipgloss.Color(themeBorderColor))
 	if m.searching {
 		border = accentStyle
 	} else if m.apiError != "" {
@@ -953,7 +939,7 @@ func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []strin
 		return []string{
 			"  " + selectedStyle.Bold(true).Width(width).Render(first),
 			"  " + selectedStyle.Width(width).Render(second),
-			"  " + selectedStyle.Foreground(lipgloss.Color("#D0D7E7")).Width(width).Render(third),
+			"  " + selectedStyle.Foreground(lipgloss.Color(themeTextColor)).Width(width).Render(third),
 		}
 	}
 	return []string{"  " + textStyle.Bold(true).Render(first), "  " + second, "  " + mutedStyle.Render(third)}
@@ -982,6 +968,8 @@ func (m model) footer(width int) string {
 	switch {
 	case m.filePickerOpen:
 		hints = []shortcut{{"enter", "jump"}, {"esc", "close"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
+	case m.themePickerOpen:
+		hints = []shortcut{{"enter", "apply"}, {"esc", "close"}, {"↑/↓", "preview"}}
 	case m.paletteOpen:
 		hints = []shortcut{{"enter", "run"}, {"esc", "close"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
 	case m.searching:
@@ -995,7 +983,7 @@ func (m model) footer(width int) string {
 	default:
 		hints = []shortcut{{"↑/↓", "select"}, {"?", "help"}, {":", "commands"}}
 	}
-	if !m.paletteOpen && !m.filePickerOpen && !m.searching && !m.showHelp {
+	if !m.paletteOpen && !m.filePickerOpen && !m.themePickerOpen && !m.searching && !m.showHelp {
 		if m.hasInboxPreview() && !m.inboxPreviewFocus {
 			hints = append(hints, shortcut{"tab", "preview"})
 		}

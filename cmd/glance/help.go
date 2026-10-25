@@ -18,7 +18,7 @@ func (m model) helpContent(width int) []string {
 		keys []shortcut
 	}
 	groups := []group{{"EVERYWHERE", []shortcut{
-		{":", "Search commands and actions"}, {"?", "Show keyboard shortcuts"},
+		{":", "Search commands and actions"}, {"t", "Choose and save a color theme"}, {"?", "Show keyboard shortcuts"},
 		{"1–3", "Switch inbox sections"}, {"r", "Refresh the current view"}, {"q / ctrl+c", "Quit glance"},
 	}}}
 	if m.detailOpen {
