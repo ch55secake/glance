@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestWideInboxWorkspaceTracksSelection(t *testing.T) {
@@ -202,15 +202,43 @@ func TestPRPreviewLimitsConcurrentRequests(t *testing.T) {
 	}
 }
 
-func TestPreviewDescriptionPreservesLineBreaksAndWraps(t *testing.T) {
+func TestPreviewMarkdownPreservesLineBreaksAndWraps(t *testing.T) {
 	body := "First line\r\nSecond line\n\nThird paragraph wraps across the pane.\nEnd\x1b[31m"
-	got := previewDescriptionLines(previewExcerpt(body), 14)
-	want := []string{"First line", "Second line", "", "Third", "paragraph", "wraps across", "the pane.", "End[31m"}
-	if !slices.Equal(got, want) {
-		t.Errorf("description lines = %#v, want %#v", got, want)
+	lines := previewMarkdown(previewBody(body), 40)
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	checkParagraphRows(t, plain)
+	if !strings.Contains(plain, "End[31m") {
+		t.Fatal("Markdown preview hid sanitized content")
 	}
-	if !slices.Equal(previewDescriptionLines("One\nTwo\n\nThree", 40), []string{"One", "Two", "", "Three"}) {
-		t.Fatal("description lost authored line breaks")
+	for _, line := range lines {
+		if lipgloss.Width(line) > 40 || strings.Contains(line, "\x1b[31m") {
+			t.Errorf("preview text escaped its pane: %q", line)
+		}
+	}
+}
+
+func TestPreviewMarkdownCacheSurvivesScrollingAndReflowsOnResize(t *testing.T) {
+	m := populatedWorkspace()
+	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyTab}, tea.KeyMsg{Type: tea.KeyPgDown})
+	if len(m.inboxLines) == 0 {
+		t.Fatal("preview did not cache its rendered Markdown")
+	}
+	cached := &m.inboxLines[0]
+	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyEnd}, tea.KeyMsg{Type: tea.KeyHome})
+	if &m.inboxLines[0] != cached {
+		t.Fatal("scrolling re-rendered the preview Markdown")
+	}
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(model)
+	if &m.inboxLines[0] == cached {
+		t.Fatal("width change did not reflow Markdown")
+	}
+	updated, _ = m.Update(previewLoadedMsg{key: m.selectedKey(), details: githubapi.PullRequestDetails{
+		PullRequest: m.pullRequests[m.selectedPR], Body: "## Refreshed description\n\nFresh context.",
+	}})
+	m = updated.(model)
+	if !strings.Contains(strings.Join(m.inboxLines, "\n"), "Fresh context.") {
+		t.Fatal("new preview data retained stale Markdown")
 	}
 }
 

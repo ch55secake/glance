@@ -87,3 +87,27 @@ func TestFilterInsertsAndDeletesAtUnicodeCursor(t *testing.T) {
 		t.Fatalf("Delete removed the wrong rune: %+v", m)
 	}
 }
+
+func TestFilterWordEditingAndWiderViewport(t *testing.T) {
+	m := initialModel()
+	m.width, m.loading = 30, false
+	m.query = "is:pr repo:team/変更 author:@me"
+	m = applyKeys(m, key("/"), tea.KeyMsg{Type: tea.KeyCtrlLeft})
+	if string([]rune(m.searchDraft)[m.searchCursor:]) != "author:@me" {
+		t.Fatal("word movement did not reach the start of the last qualifier")
+	}
+	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m.searchDraft != "is:pr author:@me" || m.query != "is:pr repo:team/変更 author:@me" {
+		t.Fatalf("word deletion damaged the query or applied it early: %q", m.searchDraft)
+	}
+	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}, Alt: true}, key(" "), key("draft:false"))
+	if m.searchDraft != "is:pr author:@me draft:false" {
+		t.Fatalf("alt+f inserted literal text or moved to the wrong boundary: %q", m.searchDraft)
+	}
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = updated.(model)
+	box := strings.Join(m.githubFilterBox(m.width-4), "\n")
+	if m.searchOffset != 0 || !strings.Contains(box, m.searchDraft+"▌") {
+		t.Fatalf("widening the field kept short text hidden: %s", box)
+	}
+}

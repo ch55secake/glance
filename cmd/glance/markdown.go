@@ -23,6 +23,7 @@ func markdownLines(body string, width int) []string {
 		glamour.WithStandardStyle(style),
 		glamour.WithColorProfile(lipgloss.ColorProfile()),
 		glamour.WithWordWrap(max(1, width-2)),
+		glamour.WithPreservedNewLines(),
 	)
 	if err == nil {
 		var rendered string
@@ -50,4 +51,12 @@ func markdownLines(body string, width int) []string {
 		}
 	}
 	return result
+}
+
+func previewMarkdown(body string, width int) []string {
+	lines := markdownLines(body, width)
+	for i, line := range lines {
+		lines[i] = strings.TrimPrefix(line, "  ")
+	}
+	return lines
 }

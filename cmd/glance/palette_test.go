@@ -98,3 +98,30 @@ func TestCommandPaletteLayoutAndMonochrome(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandPaletteMatchesWordsAndHandlesChangingActions(t *testing.T) {
+	m := populatedWorkspace()
+	m = applyKeys(m, key(":"), key("query github"))
+	if actions := m.matchingPaletteActions(); len(actions) != 1 || actions[0].name != "Edit GitHub filter" {
+		t.Fatal("palette did not match words across name and description")
+	}
+	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.searching || m.searchCursor != len([]rune(m.query)) {
+		t.Fatal("palette did not initialize the shared filter editor")
+	}
+	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyEsc}, key(":"), key("no-such-command"), tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.paletteOpen || !strings.Contains(m.View(), "No matching commands") {
+		t.Fatal("Enter with no matching commands dismissed the palette")
+	}
+	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyCtrlU}, tea.KeyMsg{Type: tea.KeyEnd})
+	// A dashboard refresh can remove context-specific commands while the palette is open.
+	updated, _ := m.Update(dashboardLoadedMsg{viewer: m.viewer})
+	m = updated.(model)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("stale selection prevented running the last remaining command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("palette did not clamp selection to the available commands")
+	}
+}

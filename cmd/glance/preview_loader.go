@@ -24,7 +24,7 @@ type previewLoadedMsg struct {
 }
 
 func (m model) schedulePRPreview() tea.Cmd {
-	if m.loading || m.prLoading || m.apiError != "" || m.width < 80 || m.height < 20 || m.activeSection != 0 || m.detailOpen || m.showHelp || m.paletteOpen || m.searching {
+	if m.loading || m.prLoading || !m.hasInboxPreview() || m.height < 20 && !m.inboxPreviewFocus || m.activeSection != 0 || m.detailOpen || m.showHelp || m.paletteOpen || m.searching {
 		return nil
 	}
 	key := m.selectedKey()
@@ -69,9 +69,11 @@ func (m *model) storePRPreview(key string, details githubapi.PullRequestDetails)
 		m.previewOrder = append(m.previewOrder, key)
 	}
 	m.previewCache[key] = details
+	m.inboxLines = nil
 }
 
 func (m *model) clearPRPreviews() {
+	m.inboxLines = nil
 	m.previewEpoch++
 	m.previewCache = nil
 	m.previewErrors = nil
