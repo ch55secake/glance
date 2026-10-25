@@ -15,9 +15,10 @@ type workspaceItem struct {
 	context string
 }
 
-func (m model) pullRequestWorkspace(items []githubapi.PullRequest, width, headingRows int) []string {
+func (m model) pullRequestWorkspace(items []githubapi.PullRequest, width int) []string {
 	selected := min(max(0, m.selectedPR), len(items)-1)
-	railTextWidth := min(38, max(26, width/3)) - 2
+	railWidth, _ := workspaceWidths(width)
+	railTextWidth := railWidth - 2
 	rail := make([]workspaceItem, 0, len(items))
 	for _, pr := range items {
 		state := ""
@@ -26,29 +27,26 @@ func (m model) pullRequestWorkspace(items []githubapi.PullRequest, width, headin
 		}
 		rail = append(rail, workspaceItem{safeText(pr.Title), workspaceReference(pr.Repository, pr.Number, railTextWidth-lipgloss.Width(state)) + state})
 	}
-	pr := items[selected]
-	return m.workspace(width, headingRows, rail, selected, "↵ open review & diff", func(w int) []string {
-		state := openBadge.Render(" ● OPEN ")
-		if pr.Draft {
-			state = draftBadge.Render(" ◆ DRAFT ")
-		}
-		lines := previewTitle(pr.Title, w)
-		lines = append(lines, "", state,
-			mutedStyle.Render(clipLine(workspaceReference(pr.Repository, pr.Number, w), w)),
-			"", textStyle.Render(clipLine("By @"+safeText(pr.User.Login), w)),
-			mutedStyle.Render(clipLine("Updated "+relativeTime(pr.UpdatedAt), w)))
-		return append(lines, m.prPreviewContext(fmt.Sprintf("%s#%d", pr.Repository, pr.Number), w, max(0, m.height-3-headingRows-2-len(lines)-4))...)
-	})
+	return m.workspace(width, rail, selected)
 }
 
-func (m model) prPreviewContext(key string, width, available int) []string {
-	if available < 1 {
-		return nil
+func (m model) pullRequestPreview(pr githubapi.PullRequest, width int) []string {
+	state := openBadge.Render(" ● OPEN ")
+	if pr.Draft {
+		state = draftBadge.Render(" ◆ DRAFT ")
 	}
+	lines := previewTitle(pr.Title, width)
+	lines = append(lines, state+" "+mutedStyle.Render(clipLine(workspaceReference(pr.Repository, pr.Number, width-10), width-10)),
+		textStyle.Render(clipLine("By @"+safeText(pr.User.Login), width)),
+		mutedStyle.Render(clipLine("Updated "+relativeTime(pr.UpdatedAt), width)))
+	return append(lines, m.prPreviewContext(fmt.Sprintf("%s#%d", pr.Repository, pr.Number), width)...)
+}
+
+func (m model) prPreviewContext(key string, width int) []string {
 	details, ok := m.previewCache[key]
 	if !ok {
 		if problem := m.previewErrors[key]; problem != "" {
-			return []string{"", warnStyle.Render("Context unavailable · r to retry"), mutedStyle.Render(clipLine(problem, width))}
+			return []string{"", warnStyle.Render(clipLine("Context unavailable · r to retry", width)), mutedStyle.Render(clipLine(problem, width))}
 		}
 		status := "Loading review context…"
 		if !m.previewPending[key] {
@@ -73,7 +71,7 @@ func (m model) prPreviewContext(key string, width, available int) []string {
 		switch check.Conclusion {
 		case "success", "neutral", "skipped":
 			pass++
-		case "failure", "timed_out", "action_required":
+		case "failure", "timed_out", "action_required", "cancelled", "startup_failure", "stale":
 			fail++
 		default:
 			running++
@@ -84,59 +82,42 @@ func (m model) prPreviewContext(key string, width, available int) []string {
 		checks = "checks unavailable"
 	}
 	lines = append(lines, style.Render(clipLine(mergeability+"  ·  "+checks, width)))
-	if len(lines) < available {
-		status := fmt.Sprintf("Reviews  %d  ·  requested  %d", len(details.Reviews), len(details.RequestedReviewers))
-		if details.ReviewsError != "" {
-			status = "Reviews unavailable"
-		}
-		lines = append(lines, mutedStyle.Render(clipLine(status, width)))
+	status := fmt.Sprintf("Reviews  %d  ·  requested  %d", len(details.Reviews), len(details.RequestedReviewers))
+	if details.ReviewsError != "" {
+		status = "Reviews unavailable"
 	}
-	if details.Head.Ref != "" && details.Base.Ref != "" && available >= 9 {
+	lines = append(lines, mutedStyle.Render(clipLine(status, width)))
+	if details.Head.Ref != "" && details.Base.Ref != "" {
 		lines = append(lines, mutedStyle.Render(clipLine(safeText(details.Head.Ref)+" → "+safeText(details.Base.Ref), width)))
 	}
-	if len(lines)+1 < available {
-		if available-len(lines) >= 4 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, accentStyle.Render("DESCRIPTION"))
-		body := previewExcerpt(details.Body)
-		if strings.TrimSpace(body) == "" {
-			body = "No description provided."
-		}
-		bodyLimit := available
-		if available >= 12 && len(details.CheckRuns)+len(details.Reviews)+len(details.RequestedReviewers) > 0 {
-			bodyLimit -= min(6, len(details.CheckRuns)+len(details.Reviews)+len(details.RequestedReviewers)+2)
-		}
-		for _, part := range previewDescriptionLines(body, width) {
-			if len(lines) >= bodyLimit {
-				break
-			}
-			lines = append(lines, mutedStyle.Render(part))
-		}
+	lines = append(lines, "", accentStyle.Render("DESCRIPTION"))
+	body := previewBody(details.Body)
+	if strings.TrimSpace(body) == "" {
+		body = "No description provided."
 	}
-	if len(details.CheckRuns) > 0 && len(lines)+2 < available {
+	for _, part := range previewDescriptionLines(body, width) {
+		lines = append(lines, textStyle.Render(part))
+	}
+	if len(details.CheckRuns) > 0 {
 		lines = append(lines, "", accentStyle.Render("CHECKS"))
 		for _, check := range details.CheckRuns {
-			if len(lines) >= available {
-				break
-			}
 			label, style := checkStyle(check)
-			lines = append(lines, style.Render(clipLine(label+"  "+safeText(check.Name), width)))
+			for _, part := range wrapPreviewWords(label+"  "+safeText(check.Name), width) {
+				lines = append(lines, style.Render(part))
+			}
 		}
 	}
-	if len(details.RequestedReviewers)+len(details.Reviews) > 0 && len(lines)+2 < available {
+	if len(details.RequestedReviewers)+len(details.Reviews) > 0 {
 		lines = append(lines, "", accentStyle.Render("REVIEW ACTIVITY"))
 		for _, reviewer := range details.RequestedReviewers {
-			if len(lines) >= available {
-				break
+			for _, part := range wrapPreviewWords("Requested @"+safeText(reviewer.Login), width) {
+				lines = append(lines, mutedStyle.Render(part))
 			}
-			lines = append(lines, mutedStyle.Render(clipLine("Requested  @"+safeText(reviewer.Login), width)))
 		}
 		for _, review := range details.Reviews {
-			if len(lines) >= available {
-				break
+			for _, part := range wrapPreviewWords("@"+safeText(review.User.Login)+"  "+safeText(review.State), width) {
+				lines = append(lines, textStyle.Render(part))
 			}
-			lines = append(lines, textStyle.Render(clipLine("@"+safeText(review.User.Login)+"  "+safeText(review.State), width)))
 		}
 	}
 	return lines
@@ -183,38 +164,43 @@ func previewDescriptionLines(body string, width int) []string {
 	return lines
 }
 
-func (m model) issueWorkspace(width, headingRows int) []string {
+func (m model) issueWorkspace(width int) []string {
 	selected := min(max(0, m.selectedIssue), len(m.issues)-1)
-	railTextWidth := min(38, max(26, width/3)) - 2
+	railWidth, _ := workspaceWidths(width)
+	railTextWidth := railWidth - 2
 	rail := make([]workspaceItem, 0, len(m.issues))
 	for _, issue := range m.issues {
 		rail = append(rail, workspaceItem{safeText(issue.Title), workspaceReference(issue.Repository, issue.Number, railTextWidth)})
 	}
-	issue := m.issues[selected]
-	return m.workspace(width, headingRows, rail, selected, "↑/↓ select an issue", func(w int) []string {
-		lines := previewTitle(issue.Title, w)
-		lines = append(lines, "", openBadge.Render(" ● OPEN "),
-			mutedStyle.Render(clipLine(workspaceReference(issue.Repository, issue.Number, w), w)),
-			"", textStyle.Render(clipLine("By @"+safeText(issue.User.Login), w)),
-			mutedStyle.Render(clipLine(fmt.Sprintf("%d comments  ·  updated %s", issue.Comments, relativeTime(issue.UpdatedAt)), w)))
-		if len(issue.Labels) > 0 {
-			labels := make([]string, 0, len(issue.Labels))
-			for _, label := range issue.Labels {
-				labels = append(labels, safeText(label.Name))
-			}
-			lines = append(lines, "", mutedStyle.Render(clipLine("Labels  "+strings.Join(labels, ", "), w)))
-		}
-		if strings.TrimSpace(issue.Body) != "" {
-			lines = append(lines, "", accentStyle.Render("DESCRIPTION"))
-			for _, part := range previewDescriptionLines(previewExcerpt(issue.Body), w) {
-				lines = append(lines, mutedStyle.Render(part))
-			}
-		}
-		return lines
-	})
+	return m.workspace(width, rail, selected)
 }
 
-func (m model) notificationWorkspace(width, headingRows int) []string {
+func issuePreview(issue githubapi.Issue, width int) []string {
+	lines := previewTitle(issue.Title, width)
+	lines = append(lines, openBadge.Render(" ● OPEN ")+" "+mutedStyle.Render(clipLine(workspaceReference(issue.Repository, issue.Number, width-10), width-10)),
+		textStyle.Render(clipLine("By @"+safeText(issue.User.Login), width)),
+		mutedStyle.Render(clipLine(fmt.Sprintf("%d comments  ·  updated %s", issue.Comments, relativeTime(issue.UpdatedAt)), width)))
+	if len(issue.Labels) > 0 {
+		labels := make([]string, 0, len(issue.Labels))
+		for _, label := range issue.Labels {
+			labels = append(labels, safeText(label.Name))
+		}
+		for _, part := range wrapPreviewWords("Labels  "+strings.Join(labels, ", "), width) {
+			lines = append(lines, mutedStyle.Render(part))
+		}
+	}
+	lines = append(lines, "", accentStyle.Render("DESCRIPTION"))
+	body := previewBody(issue.Body)
+	if strings.TrimSpace(body) == "" {
+		body = "No description provided."
+	}
+	for _, part := range previewDescriptionLines(body, width) {
+		lines = append(lines, textStyle.Render(part))
+	}
+	return lines
+}
+
+func (m model) notificationWorkspace(width int) []string {
 	selected := min(max(0, m.selectedNotification), len(m.notifications)-1)
 	rail := make([]workspaceItem, 0, len(m.notifications))
 	for _, notification := range m.notifications {
@@ -224,23 +210,24 @@ func (m model) notificationWorkspace(width, headingRows int) []string {
 		}
 		rail = append(rail, workspaceItem{marker + safeText(notification.Subject.Title), safeText(notification.Repository.FullName)})
 	}
-	notification := m.notifications[selected]
-	return m.workspace(width, headingRows, rail, selected, "↑/↓ select a thread", func(w int) []string {
-		state := mutedStyle.Render("○ READ")
-		if notification.Unread {
-			state = unreadBadge.Render(" ● UNREAD ")
-		}
-		lines := previewTitle(notification.Subject.Title, w)
-		lines = append(lines, "", state,
-			mutedStyle.Render(clipLine(safeText(notification.Repository.FullName)+"  ·  "+safeText(notification.Subject.Type), w)),
-			"", mutedStyle.Render(clipLine("Updated "+relativeTime(notification.UpdatedAt), w)))
-		if notification.LastReadAt != nil {
-			lines = append(lines, mutedStyle.Render(clipLine("Last read "+relativeTime(*notification.LastReadAt), w)))
-		}
-		return append(lines, "", accentStyle.Render("WHY THIS IS IN YOUR INBOX"),
-			textStyle.Render(clipLine(notificationReason(notification.Reason), w)),
-			mutedStyle.Render(clipLine("Reason: "+safeText(notification.Reason), w)))
-	})
+	return m.workspace(width, rail, selected)
+}
+
+func notificationPreview(notification githubapi.Notification, width int) []string {
+	state := mutedStyle.Render("○ READ")
+	if notification.Unread {
+		state = unreadBadge.Render(" ● UNREAD ")
+	}
+	lines := previewTitle(notification.Subject.Title, width)
+	lines = append(lines, state,
+		mutedStyle.Render(clipLine(safeText(notification.Repository.FullName)+"  ·  "+safeText(notification.Subject.Type), width)),
+		mutedStyle.Render(clipLine("Updated "+relativeTime(notification.UpdatedAt), width)))
+	if notification.LastReadAt != nil {
+		lines = append(lines, mutedStyle.Render(clipLine("Last read "+relativeTime(*notification.LastReadAt), width)))
+	}
+	return append(lines, "", accentStyle.Render("WHY THIS IS IN YOUR INBOX"),
+		textStyle.Render(clipLine(notificationReason(notification.Reason), width)),
+		mutedStyle.Render(clipLine("Reason: "+safeText(notification.Reason), width)))
 }
 
 func notificationReason(reason string) string {
@@ -263,7 +250,7 @@ func notificationReason(reason string) string {
 }
 
 func previewTitle(title string, width int) []string {
-	parts := wrapDiffLine(safeText(title), width)
+	parts := wrapPreviewWords(safeText(title), width)
 	lines := make([]string, 0, len(parts))
 	for _, part := range parts {
 		lines = append(lines, textStyle.Bold(true).Render(part))
@@ -271,12 +258,8 @@ func previewTitle(title string, width int) []string {
 	return lines
 }
 
-func previewExcerpt(body string) string {
-	clean := []rune(safeMultiline(strings.ReplaceAll(body, "\r\n", "\n")))
-	if len(clean) > 2000 {
-		return string(clean[:2000]) + "…"
-	}
-	return string(clean)
+func previewBody(body string) string {
+	return safeMultiline(strings.ReplaceAll(body, "\r\n", "\n"))
 }
 
 func workspaceReference(repository string, number, width int) string {
@@ -287,30 +270,21 @@ func workspaceReference(repository string, number, width int) string {
 	return label
 }
 
-func (m model) workspace(width, headingRows int, items []workspaceItem, selected int, action string, preview func(int) []string) []string {
-	height := max(1, m.height-3-headingRows-2) // masthead, heading and pinned footer
-	railWidth := min(38, max(26, width/3))
-	previewWidth := width - railWidth - 4 // gap and vertical accent
-	visible := min(len(items), max(1, (height-1)/2))
-	if len(items) > visible {
-		visible = max(1, (height-2)/2) // reserve the last row for the position cue
-	}
+func (m model) workspace(width int, items []workspaceItem, selected int) []string {
+	height := m.workspaceHeight()
+	railWidth, previewWidth := workspaceWidths(width)
+	visible := min(len(items), m.inboxPageSize())
 	start := min(max(0, selected-visible/2), len(items)-visible)
-	right := []string{mutedStyle.Render(fmt.Sprintf("SELECTED  %d / %d", selected+1, len(items))), ""}
-	right = append(right, preview(previewWidth)...)
-	if height > 10 && len(right) < height-2 {
-		actionRow := height - 2
-		for len(right) <= actionRow {
-			right = append(right, "")
-		}
-		right[actionRow] = accentStyle.Render(clipLine(action, previewWidth))
-	}
+	preview := m.inboxPreviewLines(previewWidth)
+	previewStart := min(max(0, m.inboxPreviewScroll), max(0, len(preview)-m.inboxPreviewHeight()))
+	right := []string{paneHeading(fmt.Sprintf("SELECTED  %d / %d", selected+1, len(items)), previewWidth, m.inboxPreviewFocus), ""}
+	right = append(right, preview[previewStart:min(len(preview), previewStart+m.inboxPreviewHeight())]...)
 	lines := make([]string, 0, height)
 	for row := 0; row < height; row++ {
 		left := ""
 		switch {
 		case row == 0:
-			left = mutedStyle.Render(fmt.Sprintf("INBOX  %d–%d", start+1, start+visible))
+			left = paneHeading(fmt.Sprintf("INBOX  %d–%d", start+1, start+visible), railWidth, !m.inboxPreviewFocus && !m.searching)
 		case row <= 2*visible:
 			index := start + (row-1)/2
 			item := items[index]
@@ -337,14 +311,32 @@ func (m model) workspace(width, headingRows int, items []workspaceItem, selected
 			}
 			left = style.Width(railWidth).Render(value)
 		}
-		if row == height-1 && len(items) > visible {
+		if row == height-1 {
 			left = mutedStyle.Render(clipLine(fmt.Sprintf("%d of %d  ·  ↑/↓ browse", selected+1, len(items)), railWidth))
 		}
 		part := ""
 		if row < len(right) {
 			part = right[row]
 		}
-		lines = append(lines, "  "+lipgloss.NewStyle().Width(railWidth).Render(left)+"  "+accentStyle.Render("▏ ")+part)
+		if row == height-1 {
+			hint := "tab preview"
+			if m.inboxPreviewFocus {
+				hint = "esc list"
+			}
+			part = alignStyled(hint, scrollPosition(previewStart, m.inboxPreviewHeight(), len(preview)), previewWidth, accentStyle, mutedStyle)
+		}
+		border := mutedStyle
+		if m.inboxPreviewFocus {
+			border = accentStyle
+		}
+		lines = append(lines, "  "+lipgloss.NewStyle().Width(railWidth).Render(left)+"  "+border.Render("│ ")+part)
 	}
 	return lines
+}
+
+func paneHeading(label string, width int, focused bool) string {
+	if focused {
+		return activeStyle.Width(width).Render(clipLine("▎ "+label, width))
+	}
+	return mutedStyle.Render(clipLine("  "+label, width))
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -35,13 +36,24 @@ func (m *model) deleteSearchRune(backward bool) {
 }
 
 func (m model) searchFieldWidth() int {
-	return max(1, min(max(1, m.width-4), 68)-7)
+	return max(1, min(max(1, m.width-4), 68)-6) // border, search icon and padding
 }
 
 func searchViewportStart(text string, cursor, offset, width int) int {
 	runes := []rune(text)
 	cursor = min(max(0, cursor), len(runes))
 	offset = min(max(0, offset), cursor)
+	// Reveal text again after widening the terminal or shortening the query.
+	for offset > 0 {
+		prefix := 0
+		if offset > 1 {
+			prefix = 1
+		}
+		if lipgloss.Width(string(runes[offset-1:]))+prefix+1 > width {
+			break
+		}
+		offset--
+	}
 	for offset < cursor {
 		prefix := 0
 		if offset > 0 {
@@ -60,6 +72,9 @@ func (m *model) keepSearchCursorVisible() {
 }
 
 func searchViewport(text string, cursor, offset, width int) string {
+	if width <= 1 {
+		return "▌"
+	}
 	runes := []rune(text)
 	cursor = min(max(0, cursor), len(runes))
 	offset = searchViewportStart(text, cursor, offset, width)
@@ -86,4 +101,25 @@ func searchViewport(text string, cursor, offset, width int) string {
 		remaining -= charWidth
 	}
 	return out.String()
+}
+
+func searchWordBoundary(text string, cursor, direction int) int {
+	runes := []rune(text)
+	cursor = min(max(0, cursor), len(runes))
+	if direction < 0 {
+		for cursor > 0 && unicode.IsSpace(runes[cursor-1]) {
+			cursor--
+		}
+		for cursor > 0 && !unicode.IsSpace(runes[cursor-1]) {
+			cursor--
+		}
+	} else {
+		for cursor < len(runes) && !unicode.IsSpace(runes[cursor]) {
+			cursor++
+		}
+		for cursor < len(runes) && unicode.IsSpace(runes[cursor]) {
+			cursor++
+		}
+	}
+	return cursor
 }

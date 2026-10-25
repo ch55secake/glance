@@ -34,12 +34,15 @@ type model struct {
 	notifications        []githubapi.Notification
 	notificationError    string
 	selectedNotification int
+	inboxPreviewFocus    bool
+	inboxPreviewScroll   int
 	query                string
 	searchDraft          string
 	searchCursor         int
 	searchOffset         int
 	searching            bool
 	showHelp             bool
+	helpScroll           int
 	paletteOpen          bool
 	paletteQuery         string
 	paletteSelection     int
@@ -314,6 +317,14 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.detailOpen = false
 		m.detailScroll = 0
+	case "?":
+		m.showHelp = true
+		m.helpScroll = 0
+	case "1", "2", "3":
+		section, _ := strconv.Atoi(key)
+		m.switchSection(section - 1)
+	case "/":
+		m.beginSearch()
 	case "up", "k":
 		if m.sidebarFocus {
 			m.sidebarScroll = max(0, m.sidebarScroll-1)
@@ -350,7 +361,7 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.detailScroll = m.maxDetailScroll()
 		}
-	case "tab":
+	case "tab", "shift+tab":
 		if m.hasReviewSidebar() {
 			m.sidebarFocus = !m.sidebarFocus
 		}
@@ -422,6 +433,25 @@ func (m model) detailViewportHeight() int {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	selection := m.inboxSelectionKey()
+	updated, cmd := m.update(msg)
+	next := updated.(model)
+	if selection != next.inboxSelectionKey() {
+		next.inboxPreviewScroll = 0
+	}
+	if !next.hasInboxPreview() {
+		next.inboxPreviewFocus = false
+		next.inboxPreviewScroll = 0
+	} else if _, key := msg.(tea.KeyMsg); !key && next.inboxPreviewScroll > 0 {
+		next.inboxPreviewScroll = min(next.inboxPreviewScroll, next.maxInboxPreviewScroll())
+	}
+	if next.showHelp {
+		next.helpScroll = min(next.helpScroll, next.maxHelpScroll())
+	}
+	return next, cmd
+}
+
+func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -488,7 +518,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedPR = 0
 		}
 	case previewReadyMsg:
-		if msg.epoch != m.previewEpoch || m.selectedKey() != msg.key || m.prLoading || m.width < 80 || m.height < 20 || m.activeSection != 0 || m.detailOpen || m.showHelp || m.paletteOpen || m.searching {
+		if msg.epoch != m.previewEpoch || m.selectedKey() != msg.key || m.prLoading || !m.hasInboxPreview() || m.height < 20 && !m.inboxPreviewFocus || m.activeSection != 0 || m.detailOpen || m.showHelp || m.paletteOpen || m.searching {
 			break
 		}
 		if len(m.previewPending) >= 2 || m.previewPending[msg.key] || m.previewErrors[msg.key] != "" {
@@ -607,6 +637,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchCursor = max(0, m.searchCursor-1)
 			case "right":
 				m.searchCursor = min(len([]rune(m.searchDraft)), m.searchCursor+1)
+			case "ctrl+left", "alt+left", "alt+b":
+				m.searchCursor = searchWordBoundary(m.searchDraft, m.searchCursor, -1)
+			case "ctrl+right", "alt+right", "alt+f":
+				m.searchCursor = searchWordBoundary(m.searchDraft, m.searchCursor, 1)
+			case "ctrl+w", "alt+backspace":
+				start := searchWordBoundary(m.searchDraft, m.searchCursor, -1)
+				runes := []rune(m.searchDraft)
+				m.searchDraft = string(runes[:start]) + string(runes[m.searchCursor:])
+				m.searchCursor = start
 			case "home", "ctrl+a":
 				m.searchCursor = 0
 			case "end", "ctrl+e":
@@ -614,8 +653,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+u":
 				m.searchDraft = ""
 				m.searchCursor, m.searchOffset = 0, 0
+			case " ":
+				m.insertSearchText(" ")
 			default:
-				if msg.Type == tea.KeyRunes {
+				if msg.Type == tea.KeyRunes && !msg.Alt {
 					m.insertSearchText(safeText(string(msg.Runes)))
 				}
 			}
@@ -625,11 +666,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.schedulePRPreview()
 		}
 		if m.showHelp {
-			if msg.String() == "?" || msg.String() == "esc" || msg.String() == "enter" {
+			switch msg.String() {
+			case "?", "esc", "enter":
 				m.showHelp = false
-			}
-			if msg.String() == "q" || msg.String() == "ctrl+c" {
+			case "q", "ctrl+c":
 				return m, tea.Quit
+			case "up", "k":
+				m.helpScroll = max(0, m.helpScroll-1)
+			case "down", "j":
+				m.helpScroll = min(m.maxHelpScroll(), m.helpScroll+1)
+			case "pgup", "ctrl+u":
+				m.helpScroll = max(0, m.helpScroll-m.helpViewportHeight())
+			case "pgdown", "ctrl+d":
+				m.helpScroll = min(m.maxHelpScroll(), m.helpScroll+m.helpViewportHeight())
+			case "home":
+				m.helpScroll = 0
+			case "end":
+				m.helpScroll = m.maxHelpScroll()
 			}
 			return m, m.schedulePRPreview()
 		}
@@ -641,22 +694,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.detailOpen {
 			updated, cmd := m.updatePullRequestDetailKey(msg)
-			if !m.detailOpen && cmd == nil {
-				return m, m.schedulePRPreview()
+			next := updated.(model)
+			if !next.detailOpen && cmd == nil {
+				return next, next.schedulePRPreview()
 			}
 			return updated, cmd
+		}
+		if m.inboxPreviewFocus && m.scrollInboxPreview(msg.String()) {
+			return m, m.schedulePRPreview()
 		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "left", "h":
-			m.activeSection = (m.activeSection + len(sections) - 1) % len(sections)
-		case "right", "l", "tab":
-			m.activeSection = (m.activeSection + 1) % len(sections)
+			m.switchSection((m.activeSection + len(sections) - 1) % len(sections))
+		case "right", "l":
+			m.switchSection((m.activeSection + 1) % len(sections))
+		case "1", "2", "3":
+			section, _ := strconv.Atoi(msg.String())
+			m.switchSection(section - 1)
+		case "tab", "shift+tab":
+			if m.hasInboxPreview() {
+				m.inboxPreviewFocus = !m.inboxPreviewFocus
+			}
 		case "up", "k":
 			m.moveSelection(-1)
 		case "down", "j":
 			m.moveSelection(1)
+		case "pgup", "ctrl+u":
+			m.moveSelection(-m.inboxPageSize())
+		case "pgdown", "ctrl+d":
+			m.moveSelection(m.inboxPageSize())
 		case "home":
 			m.setSelection(0)
 		case "end":
@@ -667,13 +735,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "?":
 			m.showHelp = true
+			m.helpScroll = 0
 		case "/":
 			if m.activeSection == 0 {
-				m.searching = true
-				m.searchDraft = m.query
-				m.searchCursor = len([]rune(m.searchDraft))
-				m.searchOffset = 0
-				m.keepSearchCursorVisible()
+				m.beginSearch()
 			}
 		case "r", "R":
 			if m.loading {

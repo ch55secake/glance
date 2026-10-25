@@ -204,7 +204,7 @@ func TestPRPreviewLimitsConcurrentRequests(t *testing.T) {
 
 func TestPreviewDescriptionPreservesLineBreaksAndWraps(t *testing.T) {
 	body := "First line\r\nSecond line\n\nThird paragraph wraps across the pane.\nEnd\x1b[31m"
-	got := previewDescriptionLines(previewExcerpt(body), 14)
+	got := previewDescriptionLines(previewBody(body), 14)
 	want := []string{"First line", "Second line", "", "Third", "paragraph", "wraps across", "the pane.", "End[31m"}
 	if !slices.Equal(got, want) {
 		t.Errorf("description lines = %#v, want %#v", got, want)

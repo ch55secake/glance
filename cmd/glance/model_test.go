@@ -29,7 +29,7 @@ func TestNavigation(t *testing.T) {
 		{name: "previous section", start: 1, key: tea.KeyLeft, want: 0},
 		{name: "wrap forward", start: len(sections) - 1, key: tea.KeyRight, want: 0},
 		{name: "wrap backward", start: 0, key: tea.KeyLeft, want: len(sections) - 1},
-		{name: "tab advances", start: 0, key: tea.KeyTab, want: 1},
+		{name: "tab without a preview stays put", start: 0, key: tea.KeyTab, want: 0},
 	}
 
 	for _, tt := range tests {

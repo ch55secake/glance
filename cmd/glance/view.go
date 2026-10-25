@@ -12,6 +12,7 @@ import (
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 )
 
@@ -38,6 +39,9 @@ var (
 
 // View renders a fixed-height dashboard; the PR window moves with the selection.
 func (m model) View() string {
+	if m.width < 30 || m.height < 10 {
+		return m.smallTerminalView()
+	}
 	width := max(1, m.width)
 	inner := max(1, width-4)
 	lines := []string{
@@ -96,7 +100,22 @@ func (m model) View() string {
 	if m.height > 3 && len(viewLines) > m.height {
 		viewLines = append(viewLines[:m.height-3], viewLines[len(viewLines)-3:]...)
 	}
+	for i, line := range viewLines {
+		viewLines[i] = ansi.Truncate(line, width, "…")
+	}
 	return strings.Join(viewLines, "\n")
+}
+
+func (m model) smallTerminalView() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+	lines := []string{brandStyle.Render("glance"), "Resize to at least 30 × 10", "ctrl+c quit"}
+	lines = lines[:min(len(lines), m.height)]
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, m.width, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) header(width int) string {
@@ -123,11 +142,11 @@ func (m model) navigation(width int) string {
 	if m.detailOpen {
 		left := "  ← Pull requests  /  " + safeText(m.detailKey)
 		style := mutedStyle
-		if !m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp {
+		if !m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp && !m.paletteOpen {
 			left = "▎ ← Pull requests  /  " + safeText(m.detailKey)
 			style = activeStyle
 		}
-		if width >= 55 {
+		if width >= 55 && !m.paletteOpen && !m.showHelp {
 			leftWidth, _ := m.reviewWidths(width)
 			total := len(m.pullRequestDetailsView(leftWidth))
 			progress := fmt.Sprintf("%d–%d / %d", min(m.detailScroll+1, total), min(m.detailScroll+m.detailViewportHeight(), total), total)
@@ -135,13 +154,21 @@ func (m model) navigation(width int) string {
 		}
 		return "  " + style.Render(clipLine(left, width))
 	}
-	if width < 65 {
+	if width < 40 {
 		label := fmt.Sprintf("%d / %d  %s", m.activeSection+1, len(sections), sections[m.activeSection])
 		return "  " + activeStyle.Render(clipLine(label, width))
 	}
 	tabs := make([]string, 0, len(sections))
-	for i, section := range sections {
+	names := sections
+	if width < 65 {
+		names = []string{"PRs", "Issues", "Inbox"}
+	}
+	for i, section := range names {
 		label := fmt.Sprintf(" %d %s ", i+1, section)
+		if width >= 90 {
+			count := []int{len(m.pullRequests), len(m.issues), len(m.notifications)}[i]
+			label = fmt.Sprintf(" %d %s (%d) ", i+1, section, count)
+		}
 		if i == m.activeSection {
 			tabs = append(tabs, activeStyle.Render(label))
 		} else {
@@ -179,8 +206,8 @@ func (m model) issueView(width int) []string {
 	if len(m.issues) == 0 {
 		return append(lines, m.message(width, "All clear", "No open issues found across repositories visible to your account.", "Press r to refresh.")...)
 	}
-	if width >= 76 {
-		return append(lines, m.issueWorkspace(width, len(lines))...)
+	if m.hasInboxPreview() {
+		return append(lines, m.issueWorkspace(width)...)
 	}
 	visible := min(m.visibleListCount(), len(m.issues))
 	start := min(max(0, m.selectedIssue-visible/2), len(m.issues)-visible)
@@ -245,8 +272,8 @@ func (m model) notificationView(width int) []string {
 	if len(m.notifications) == 0 {
 		return append(lines, m.message(width, "You're all caught up", "No notifications were found.", "Press r to refresh.")...)
 	}
-	if width >= 76 {
-		return append(lines, m.notificationWorkspace(width, len(lines))...)
+	if m.hasInboxPreview() {
+		return append(lines, m.notificationWorkspace(width)...)
 	}
 	visible := min(m.visibleListCount(), len(m.notifications))
 	start := min(max(0, m.selectedNotification-visible/2), len(m.notifications)-visible)
@@ -290,34 +317,14 @@ func (m model) hasErrors() bool {
 }
 
 func (m model) helpView(width int) []string {
-	shortcuts := []string{
-		"←/→ or h/l  Switch sections", "↑/↓ or j/k  Select list item", "Home / End   First / last item",
-		"r            Refresh", ":            Command palette", "?            Close help", "q            Quit",
+	content := m.helpContent(width)
+	visible := m.helpViewportHeight()
+	start := min(m.helpScroll, max(0, len(content)-visible))
+	heading := accentStyle.Render("KEYBOARD SHORTCUTS")
+	if width >= 50 {
+		heading = align(heading, mutedStyle.Render(scrollPosition(start, visible, len(content))), width)
 	}
-	if m.detailOpen {
-		shortcuts = []string{
-			"↑/↓ or j/k  Scroll PR details and diff", "tab          Focus sidebar (wide terminals)", "PgUp/PgDn    Scroll a screen", "Home / End   First / last line",
-			"m            Merge pull request", "r            Refresh details and diff", ":            Command palette",
-			"esc          Return to previous section", "?            Close help", "q            Quit",
-		}
-	} else if m.activeSection == 0 {
-		shortcuts = append(shortcuts, "enter        Open PR details", "/            Edit GitHub PR filter", "enter        Apply filter while editing", "esc          Cancel filter edit")
-	}
-	if m.height < 19 {
-		if m.detailOpen {
-			shortcuts = []string{"↑/↓ scroll   PgUp/PgDn page", "m merge   r refresh", ": commands   esc back   ? close   q quit"}
-		} else {
-			shortcuts = []string{"←/→ sections   ↑/↓ select", ": commands   r refresh   ? close   q quit"}
-			if m.activeSection == 0 {
-				shortcuts = append(shortcuts, "enter details   / edit GitHub filter")
-			}
-		}
-	}
-	lines := []string{"  " + accentStyle.Render("KEYBOARD SHORTCUTS"), ""}
-	for _, shortcut := range shortcuts {
-		lines = append(lines, "  "+textStyle.Render(clipLine(shortcut, width)))
-	}
-	return lines
+	return append([]string{"  " + heading, ""}, content[start:min(len(content), start+visible)]...)
 }
 
 func (m model) pullRequestView(width int) []string {
@@ -335,8 +342,8 @@ func (m model) pullRequestView(width int) []string {
 	if len(m.pullRequests) == 0 {
 		return append(lines, m.message(width, "No matches", "No pull requests match this GitHub filter.", "Press / to change the filter.")...)
 	}
-	if width >= 76 {
-		return append(lines, m.pullRequestWorkspace(items, width, len(lines))...)
+	if m.hasInboxPreview() {
+		return append(lines, m.pullRequestWorkspace(items, width)...)
 	}
 
 	visible := min(m.visibleListCount(), len(items))
@@ -515,7 +522,7 @@ func checkStyle(check githubapi.CheckRun) (label string, style lipgloss.Style) {
 		return "✓ PASS", goodStyle
 	case "neutral", "skipped":
 		return "– SKIP", mutedStyle
-	case "failure", "timed_out", "action_required":
+	case "failure", "timed_out", "action_required", "startup_failure", "stale":
 		return "✕ FAIL", errorStyle
 	case "cancelled":
 		return "! CANCEL", warnStyle
@@ -573,7 +580,7 @@ func (m model) reviewSidebar(width, height int) []string {
 	inner := max(1, width-2)
 	heading := "  ◈ READINESS"
 	headingStyle := accentStyle
-	if m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp {
+	if m.sidebarFocus && m.mergeDialog == noMergeDialog && !m.mergeInProgress && !m.showHelp && !m.paletteOpen {
 		heading = "▎ ◈ READINESS"
 		headingStyle = activeStyle
 	}
@@ -641,6 +648,9 @@ func (m model) mergeActionPanel(width int) []string {
 			guidance = "r refresh  ·  ↑/↓ scroll  ·  PgUp/PgDn"
 		} else if m.hasReviewSidebar() {
 			guidance = "tab switch pane  ·  ↑/↓ scroll  ·  PgUp/PgDn page  ·  ? help"
+		}
+		if width >= 70 {
+			actions += "  ·  : commands"
 		}
 		return append(lines,
 			"  "+accentStyle.Render(clipLine(actions, width)),
@@ -877,7 +887,11 @@ func (m model) githubFilterBox(width int) []string {
 		count = "↻ " + count
 	}
 	top := "╭─ " + count + " " + strings.Repeat("─", max(0, boxWidth-lipgloss.Width(count)-5)) + "╮"
-	bottom := "╰" + strings.Repeat("─", boxWidth-2) + "╯"
+	hint := "/ edit"
+	if m.searching {
+		hint = "editing"
+	}
+	bottom := "╰─ " + hint + " " + strings.Repeat("─", max(0, boxWidth-lipgloss.Width(hint)-5)) + "╯"
 	return []string{
 		border.Render(top),
 		border.Render("│") + textStyle.Width(inputWidth).Render(" ⌕ "+value) + border.Render("│"),
@@ -943,38 +957,49 @@ func (m model) message(width int, title, detail, hint string) []string {
 }
 
 func (m model) footer(width int) string {
-	help := "←/→ sections   r refresh   ? help   q quit"
-	if m.detailOpen {
-		switch {
-		case m.mergeInProgress:
-			help = "Merge in progress…   q quit"
-		case m.mergeDialog == chooseMergeMethod:
-			help = "↑/↓ choose method   enter continue   esc cancel"
-		case m.mergeDialog == confirmMerge:
-			help = "y confirm merge   esc cancel"
-		default:
-			help = "esc back   ↑/↓ scroll   PgUp/PgDn page   m merge"
-			if m.hasReviewSidebar() {
-				help = "tab sidebar/diff   j/k scroll   m merge   esc back"
-			}
+	var hints []shortcut
+	switch {
+	case m.paletteOpen:
+		hints = []shortcut{{"enter", "run"}, {"esc", "close"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
+	case m.searching:
+		hints = []shortcut{{"enter", "apply"}, {"esc", "cancel"}, {"←/→", "move"}, {"Home/End", "jump"}, {"ctrl+u", "clear"}}
+	case m.showHelp:
+		hints = []shortcut{{"esc", "close"}, {"↑/↓", "scroll"}, {"?", "close"}, {"q", "quit"}}
+	case m.inboxPreviewFocus:
+		hints = []shortcut{{"esc", "list"}, {"?", "help"}, {"↑/↓", "scroll"}, {"PgUp/PgDn", "page"}, {":", "commands"}}
+	case m.activeSection == 0:
+		hints = []shortcut{{"enter", "review"}, {"?", "help"}, {"/", "filter"}, {":", "commands"}}
+	default:
+		hints = []shortcut{{"↑/↓", "select"}, {"?", "help"}, {":", "commands"}}
+	}
+	if !m.paletteOpen && !m.searching && !m.showHelp {
+		if m.hasInboxPreview() && !m.inboxPreviewFocus {
+			hints = append(hints, shortcut{"tab", "preview"})
 		}
-	} else {
-		switch m.activeSection {
-		case 0:
-			help = "enter details   ↑/↓ select   / GitHub filter   r refresh"
-		case 1, 2:
-			help = "↑/↓ select   r refresh   ? help   q quit"
+		hints = append(hints, shortcut{"1–3", "sections"}, shortcut{"r", "refresh"}, shortcut{"q", "quit"})
+	}
+	return "  " + shortcutHints(width, hints...)
+}
+
+type shortcut struct{ key, label string }
+
+// Only show complete hints; important controls never disappear into an ellipsis.
+func shortcutHints(width int, hints ...shortcut) string {
+	var parts []string
+	used := 0
+	for _, hint := range hints {
+		size := lipgloss.Width(hint.key + " " + hint.label)
+		gap := 0
+		if len(parts) > 0 {
+			gap = 2
 		}
+		if used+gap+size > width {
+			continue
+		}
+		parts = append(parts, accentStyle.Render(hint.key)+" "+mutedStyle.Render(hint.label))
+		used += gap + size
 	}
-	if m.searching {
-		help = "←/→ move   Home/End jump   Del erase   enter apply   esc cancel"
-	}
-	if m.paletteOpen {
-		help = "↑/↓ choose   enter run   esc close   ctrl+u clear"
-	} else if !m.detailOpen && width >= 62 {
-		help = clipLine(help+"   : commands", width)
-	}
-	return "  " + mutedStyle.Render(clipLine(help, width))
+	return strings.Join(parts, "  ")
 }
 
 func (m model) visibleListCount() int {

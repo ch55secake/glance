@@ -27,21 +27,50 @@ commands while you use the TUI.
 make run
 ```
 
-Use left/right or `h`/`l` to switch sections; press `?` for the full shortcut
-list and `q` to quit. Press `:` for a command palette with navigation and common
-actions. glance opens directly to Pull requests, searching repositories visible
-to your GitHub account. The PR inbox defaults to the
-GitHub filter `is:pr is:open author:@me`. Press `/` to edit it using GitHub search qualifiers
-(for example, `repo:owner/name is:open`), `enter` to apply it, or `esc` to
-cancel. While editing, use left/right or Home/End to move the cursor through
-long queries; Backspace/Delete edit at the cursor. Press up/down or `j`/`k` to
-browse results. On wider terminals,
-each inbox has a compact selection rail beside a preview of the selected item;
-on narrow terminals, items appear in a single column. The selected PR's
-description (with line breaks), mergeability, checks, and review summary load
-after a short pause and are cached while browsing. Press `r` to refresh the
-current filter. Press `enter` on a PR to open its details and automatically
-load all changed files and patches in the same continuous, scrollable view.
+### Finding your way around
+
+glance opens directly to Pull requests. On wider terminals, each inbox has a
+compact selection rail beside a preview; narrow terminals use a single column.
+The active pane has a highlighted heading and a marker that also works without
+color. Shortcut hints stay pinned at the bottom.
+
+| Key | Action |
+| --- | --- |
+| `1` / `2` / `3`, left/right or `h`/`l` | Switch inbox sections |
+| Up/down or `j`/`k` | Select an item, or scroll the focused preview |
+| `tab` / `shift+tab` | Switch between list and preview on wide terminals |
+| `PgUp` / `PgDn`, `ctrl+u` / `ctrl+d` | Move a screen in the active pane |
+| `Home` / `End` | First/last item or line |
+| `esc` | Return focus from the preview to the list |
+| `enter` | Open the selected PR's review and diff |
+| `:` | Search the command palette |
+| `?` | Open scrollable keyboard help, including during PR review |
+| `r` / `q` | Refresh / quit |
+
+The palette matches words in command names and descriptions. Use up/down,
+`tab`/`shift+tab`, or `ctrl+n`/`ctrl+p` to select a command, `enter` to run it,
+and `esc` to return to the same position. It also shows each command's shortcut.
+
+The selected PR's description, mergeability, checks, and review activity load
+after a short pause and are cached while browsing. Focus its preview to scroll
+through the full content. Issues include descriptions, labels, and comment
+counts; notifications explain why each thread is in your inbox.
+
+### GitHub filters
+
+The PR inbox defaults to `is:pr is:open author:@me`. Press `/` to edit it using
+GitHub search qualifiers (for example, `repo:owner/name is:open`), `enter` to
+apply, or `esc` to cancel. Editing only fetches results when you submit.
+
+Use left/right to move the cursor, Home/End or `ctrl+a`/`ctrl+e` to jump to an
+edge, and `ctrl+left`/`ctrl+right` or `alt+b`/`alt+f` to move by a word.
+Backspace/Delete edit at the cursor, `ctrl+w` deletes the preceding word, and
+`ctrl+u` clears the query. Long queries scroll horizontally with the cursor.
+
+### Reviewing and merging
+
+Press `enter` on a PR to open its details and automatically load all changed
+files and patches in the same continuous, scrollable view.
 Use up/down or `j`/`k` to scroll through the details and diff, `PgUp`/`PgDn` to move by a
 screen, and `esc` to return to the same inbox position. Diff additions,
 deletions, hunks, old/new line numbers, and recognized source code are highlighted;
@@ -54,9 +83,6 @@ navigation controls stay together in the pinned action area. Press `m` to select
 an enabled merge method with up/down or `j`/`k`, press `enter`, then confirm
 with `y`. glance sends the merge through the GitHub API using the loaded head
 SHA and refreshes the dashboard afterwards.
-The Issues section shows open issues across accessible repositories with labels
-and comment counts. Notifications shows read and unread threads and their
-reasons; use up/down or `j`/`k` to browse either inbox.
 
 Build the executable with:
 
