@@ -36,6 +36,8 @@ type model struct {
 	selectedNotification int
 	query                string
 	searchDraft          string
+	searchCursor         int
+	searchOffset         int
 	searching            bool
 	showHelp             bool
 	paletteOpen          bool
@@ -424,6 +426,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.searching {
+			m.keepSearchCursorVisible()
+		}
 		if m.detailOpen {
 			m.cacheDetailLines()
 		}
@@ -577,10 +582,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.searching = false
 				m.searchDraft = ""
+				m.searchCursor, m.searchOffset = 0, 0
 			case "enter":
 				m.searching = false
 				query := strings.TrimSpace(m.searchDraft)
 				m.searchDraft = ""
+				m.searchCursor, m.searchOffset = 0, 0
 				if query == "" {
 					query = defaultPRQuery
 				}
@@ -593,13 +600,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.searchPullRequests()
 				}
 			case "backspace", "ctrl+h":
-				m.searchDraft = dropLastRune(m.searchDraft)
+				m.deleteSearchRune(true)
+			case "delete":
+				m.deleteSearchRune(false)
+			case "left":
+				m.searchCursor = max(0, m.searchCursor-1)
+			case "right":
+				m.searchCursor = min(len([]rune(m.searchDraft)), m.searchCursor+1)
+			case "home", "ctrl+a":
+				m.searchCursor = 0
+			case "end", "ctrl+e":
+				m.searchCursor = len([]rune(m.searchDraft))
 			case "ctrl+u":
 				m.searchDraft = ""
+				m.searchCursor, m.searchOffset = 0, 0
 			default:
 				if msg.Type == tea.KeyRunes {
-					m.searchDraft += string(msg.Runes)
+					m.insertSearchText(safeText(string(msg.Runes)))
 				}
+			}
+			if m.searching {
+				m.keepSearchCursorVisible()
 			}
 			return m, m.schedulePRPreview()
 		}
@@ -650,6 +671,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeSection == 0 {
 				m.searching = true
 				m.searchDraft = m.query
+				m.searchCursor = len([]rune(m.searchDraft))
+				m.searchOffset = 0
+				m.keepSearchCursorVisible()
 			}
 		case "r", "R":
 			if m.loading {

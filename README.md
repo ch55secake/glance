@@ -33,7 +33,9 @@ actions. glance opens directly to Pull requests, searching repositories visible
 to your GitHub account. The PR inbox defaults to the
 GitHub filter `is:pr is:open author:@me`. Press `/` to edit it using GitHub search qualifiers
 (for example, `repo:owner/name is:open`), `enter` to apply it, or `esc` to
-cancel. Press up/down or `j`/`k` to browse results. On wider terminals,
+cancel. While editing, use left/right or Home/End to move the cursor through
+long queries; Backspace/Delete edit at the cursor. Press up/down or `j`/`k` to
+browse results. On wider terminals,
 each inbox has a compact selection rail beside a preview of the selected item;
 on narrow terminals, items appear in a single column. The selected PR's
 description (with line breaks), mergeability, checks, and review summary load
