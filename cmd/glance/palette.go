@@ -28,6 +28,9 @@ func (m model) paletteActions() []paletteAction {
 			m.activeSection = 0
 			m.searching = true
 			m.searchDraft = m.query
+			m.searchCursor = len([]rune(m.searchDraft))
+			m.searchOffset = 0
+			m.keepSearchCursorVisible()
 			return nil
 		}},
 		{"Help", "Show shortcuts", func(m *model) tea.Cmd { m.showHelp = true; return nil }},

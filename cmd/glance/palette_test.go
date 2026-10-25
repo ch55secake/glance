@@ -68,11 +68,11 @@ func TestCommandPalettePreservesReviewAndFilterModes(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	if m.detailOpen || !m.searching || m.searchDraft != defaultPRQuery || m.paletteOpen {
+	if m.detailOpen || !m.searching || m.searchDraft != defaultPRQuery || m.searchCursor != len([]rune(defaultPRQuery)) || m.paletteOpen {
 		t.Fatalf("filter action did not open PR query editor: %+v", m)
 	}
 	updated, _ = m.Update(key(":"))
-	if updated.(model).paletteOpen || updated.(model).searchDraft != defaultPRQuery+":" {
+	if updated.(model).paletteOpen || updated.(model).searchDraft != defaultPRQuery+":" || updated.(model).searchCursor != len([]rune(defaultPRQuery))+1 {
 		t.Fatal("colon inside filter editor unexpectedly opened palette")
 	}
 }
