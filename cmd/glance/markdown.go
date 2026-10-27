@@ -39,7 +39,7 @@ func markdownLines(body string, width int) []string {
 				// Fenced code can be wider than Glamour's prose wrapping. Never
 				// discard the tail of a code line to fit the review column.
 				for _, part := range strings.Split(ansi.Hardwrap(line, max(1, width-2), true), "\n") {
-					result = append(result, "  "+part)
+					result = append(result, "  "+trimMarkdownMargin(part, 2))
 				}
 			}
 			return result
@@ -55,14 +55,29 @@ func markdownLines(body string, width int) []string {
 	return result
 }
 
+// Glamour adds a document margin to each rendered line. Keep the TUI's own
+// two-cell gutter, but remove Glamour's extra margin so prose uses the pane.
+func trimMarkdownMargin(line string, cells int) string {
+	plain := ansi.Strip(line)
+	leading := lipgloss.Width(plain) - lipgloss.Width(strings.TrimLeft(plain, " "))
+	return ansi.Cut(line, min(cells, leading), lipgloss.Width(line))
+}
+
 func markdownThemeStyles() glamouransi.StyleConfig {
 	style := glamourstyles.DarkStyleConfig
 	color := func(value string) *string { return &value }
+	margin := func(value uint) *uint { return &value }
+	bold := func(value bool) *bool { return &value }
+	style.Document.Margin = margin(0)
+	style.CodeBlock.Margin = margin(1)
 	style.Document.Color = color(activeTheme.text)
 	style.Heading.Color = color(activeTheme.accent)
+	style.Heading.Bold = bold(true)
 	style.H1.Color, style.H1.BackgroundColor = color(activeTheme.accent), nil
 	style.H2.Color, style.H3.Color = color(activeTheme.accent), color(activeTheme.accent)
 	style.H4.Color, style.H5.Color, style.H6.Color = color(activeTheme.accent), color(activeTheme.accent), color(activeTheme.accent)
+	style.H2.Bold, style.H3.Bold = bold(true), bold(true)
+	style.H4.Bold, style.H5.Bold, style.H6.Bold = bold(true), bold(true), bold(true)
 	style.Link.Color = color(activeTheme.brand)
 	style.LinkText.Color = color(activeTheme.accent)
 	style.Code.Color = color(activeTheme.codeString)
@@ -86,7 +101,9 @@ func markdownThemeStyles() glamouransi.StyleConfig {
 func previewMarkdown(body string, width int) []string {
 	lines := markdownLines(body, width)
 	for i, line := range lines {
-		lines[i] = strings.TrimPrefix(line, "  ")
+		// Cut the review-column gutter by terminal cells so ANSI styles don't
+		// leave stray spaces behind in the inbox preview.
+		lines[i] = ansi.Cut(line, 2, lipgloss.Width(line))
 	}
 	return lines
 }

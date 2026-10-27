@@ -441,3 +441,26 @@ func TestMarkdownLongCodeIsNotTruncated(t *testing.T) {
 		}
 	}
 }
+
+func TestDiffWrapsAtWordBoundariesWithoutDroppingText(t *testing.T) {
+	sentence := "The quick brown fox jumps over the lazy dog."
+	parts := wrapDiffWords(sentence, 12)
+	if strings.Join(parts, "") != sentence {
+		t.Fatalf("word wrapping changed the source: %#v", parts)
+	}
+	for _, part := range parts[:len(parts)-1] {
+		if !strings.HasSuffix(part, " ") {
+			t.Errorf("word wrap split a word: %#v", parts)
+		}
+	}
+	longToken := "+identifierWithoutBreaks123"
+	parts = wrapDiffWords(longToken, 12)
+	if strings.Join(parts, "") != longToken || len(parts) < 2 {
+		t.Fatalf("long token was truncated or not hard-wrapped: %#v", parts)
+	}
+	for _, part := range parts {
+		if lipgloss.Width(part) > 12 {
+			t.Errorf("wrapped diff segment exceeds width: %q", part)
+		}
+	}
+}
