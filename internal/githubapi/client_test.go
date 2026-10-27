@@ -199,6 +199,43 @@ func TestMergePullRequestUsesExpectedHeadAndMethod(t *testing.T) {
 	}
 }
 
+func TestCreatePullRequestCommentPreservesMultilineBody(t *testing.T) {
+	body := "Thanks for the update.\n\nCould you add a regression test?"
+	runner := &stubRunner{stdout: []byte(`{"id":43,"body":"Thanks for the update.\n\nCould you add a regression test?","html_url":"https://github.com/octo/project/pull/42#issuecomment-43"}`)}
+	comment, err := NewClientWithRunner(runner).CreatePullRequestComment(context.Background(), "octo", "project", 42, body)
+	if err != nil {
+		t.Fatalf("CreatePullRequestComment() error = %v", err)
+	}
+	if comment.ID != 43 || comment.Body != body || comment.HTMLURL == "" {
+		t.Fatalf("CreatePullRequestComment() = %+v", comment)
+	}
+	want := [][]string{{"api", "-X", "POST", "-f", "body=" + body, "repos/octo/project/issues/42/comments"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Errorf("gh calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestCreatePullRequestCommentRejectsInvalidReferenceOrBlankBody(t *testing.T) {
+	runner := &stubRunner{}
+	client := NewClientWithRunner(runner)
+	for _, tc := range []struct {
+		owner, repository string
+		number            int
+		body              string
+	}{
+		{"owner/repo", "repo", 42, "comment"},
+		{"owner", "repo", 0, "comment"},
+		{"owner", "repo", 42, " \n\t "},
+	} {
+		if _, err := client.CreatePullRequestComment(context.Background(), tc.owner, tc.repository, tc.number, tc.body); err == nil {
+			t.Errorf("CreatePullRequestComment(%q, %q, %d, %q) error = nil", tc.owner, tc.repository, tc.number, tc.body)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("invalid comment request invoked gh: %#v", runner.calls)
+	}
+}
+
 func TestMergePullRequestRequiresValidMethodAndHeadSHA(t *testing.T) {
 	runner := &stubRunner{}
 	client := NewClientWithRunner(runner)

@@ -36,11 +36,11 @@ func panel(width, height int, title, status string, content []string, focused bo
 	return append(lines, cap("╰", "╯", status))
 }
 
-// Keep the working context visible beneath command and file pickers. ANSI-aware
-// cuts preserve terminal cell positions even with wide glyphs at the card edge.
+// Keep the working context visible beneath command, file, and comment dialogs.
+// ANSI-aware cuts preserve cell positions even with wide glyphs at the card edge.
 func (m model) modalView() string {
 	background := m
-	background.paletteOpen, background.filePickerOpen, background.themePickerOpen = false, false, false
+	background.paletteOpen, background.filePickerOpen, background.themePickerOpen, background.commentComposerOpen = false, false, false, false
 	lines := strings.Split(background.View(), "\n")
 	for len(lines) < m.height {
 		lines = append(lines, "")
@@ -57,6 +57,8 @@ func (m model) modalView() string {
 	} else if m.filePickerOpen {
 		cardWidth = min(width, 100)
 		card = m.filePickerView(width)
+	} else if m.commentComposerOpen {
+		card = m.commentComposerView(width)
 	} else {
 		card = m.paletteView(width)
 	}

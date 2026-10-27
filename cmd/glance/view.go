@@ -26,7 +26,7 @@ func (m model) View() string {
 	if m.width < 30 || m.height < 10 {
 		return m.smallTerminalView()
 	}
-	if m.paletteOpen || m.filePickerOpen || m.themePickerOpen {
+	if m.paletteOpen || m.filePickerOpen || m.themePickerOpen || m.commentComposerOpen {
 		return m.modalView()
 	}
 	width := max(1, m.width)
@@ -678,6 +678,9 @@ func (m model) mergeActionPanel(width int) []string {
 	if m.mergeNotice != "" {
 		lines = append(lines, panelMessage(m.mergeNotice, width, goodStyle)...)
 	}
+	if m.commentNotice != "" {
+		lines = append(lines, panelMessage(m.commentNotice, width, goodStyle)...)
+	}
 	if m.mergeInProgress || m.mergeDialog != noMergeDialog || len(lines) > 0 {
 		lines = append([]string{"  " + mutedStyle.Render(strings.Repeat("─", width))}, lines...)
 	}
@@ -1058,6 +1061,8 @@ func (m model) message(width int, title, detail, hint string) []string {
 func (m model) footer(width int) string {
 	var hints []shortcut
 	switch {
+	case m.commentComposerOpen:
+		hints = []shortcut{{"ctrl+s", "post"}, {"enter", "new line"}, {"esc", "cancel"}, {"ctrl+u", "clear"}}
 	case m.filePickerOpen:
 		hints = []shortcut{{"enter", "jump"}, {"esc", "close"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
 	case m.themePickerOpen:
@@ -1075,7 +1080,7 @@ func (m model) footer(width int) string {
 	default:
 		hints = []shortcut{{"↑/↓", "select"}, {"?", "help"}, {":", "commands"}}
 	}
-	if !m.paletteOpen && !m.filePickerOpen && !m.themePickerOpen && !m.searching && !m.showHelp {
+	if !m.paletteOpen && !m.filePickerOpen && !m.themePickerOpen && !m.commentComposerOpen && !m.searching && !m.showHelp {
 		if m.hasInboxPreview() && !m.inboxPreviewFocus {
 			hints = append(hints, shortcut{"tab", "preview"})
 		}
