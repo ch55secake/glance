@@ -132,6 +132,17 @@ type PullRequestComment struct {
 	HTMLURL string `json:"html_url"`
 }
 
+// PullRequestReviewComment is a conversation comment attached to a diff line.
+type PullRequestReviewComment struct {
+	ID       int64  `json:"id"`
+	Body     string `json:"body"`
+	HTMLURL  string `json:"html_url"`
+	Path     string `json:"path"`
+	Line     int    `json:"line"`
+	Side     string `json:"side"`
+	CommitID string `json:"commit_id"`
+}
+
 type repositoryMergeSettings struct {
 	AllowMergeCommit bool `json:"allow_merge_commit"`
 	AllowSquashMerge bool `json:"allow_squash_merge"`
@@ -654,6 +665,43 @@ func (c *Client) CreatePullRequestComment(ctx context.Context, owner, repository
 	if len(bytes.TrimSpace(stdout)) > 0 {
 		if err := json.Unmarshal(stdout, &comment); err != nil {
 			return PullRequestComment{}, fmt.Errorf("decode gh api pull request comment response: %w", err)
+		}
+	}
+	return comment, nil
+}
+
+// CreatePullRequestReviewComment posts a conversation comment on one side of a diff line.
+func (c *Client) CreatePullRequestReviewComment(ctx context.Context, owner, repository string, number int, commitSHA, path string, line int, side, body string) (PullRequestReviewComment, error) {
+	if !validPathSegment(owner) || !validPathSegment(repository) || number < 1 {
+		return PullRequestReviewComment{}, errors.New("GitHub owner, repository, and pull request number must be valid")
+	}
+	if strings.TrimSpace(commitSHA) == "" || strings.TrimSpace(path) == "" || line < 1 {
+		return PullRequestReviewComment{}, errors.New("a current commit SHA, file path, and diff line are required")
+	}
+	side = strings.ToUpper(strings.TrimSpace(side))
+	if side != "LEFT" && side != "RIGHT" {
+		return PullRequestReviewComment{}, fmt.Errorf("unsupported pull request diff side %q", side)
+	}
+	if strings.TrimSpace(body) == "" {
+		return PullRequestReviewComment{}, errors.New("a non-empty pull request comment is required")
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/comments", url.PathEscape(owner), url.PathEscape(repository), number)
+	stdout, stderr, err := c.runner.Run(ctx,
+		"api", "-X", "POST",
+		"-f", "body="+body,
+		"-f", "commit_id="+commitSHA,
+		"-f", "path="+path,
+		"-F", fmt.Sprintf("line=%d", line),
+		"-f", "side="+side,
+		endpoint,
+	)
+	if err != nil {
+		return PullRequestReviewComment{}, fmt.Errorf("post pull request diff comment: %w", newCommandError(stderr, err))
+	}
+	comment := PullRequestReviewComment{Body: body, Path: path, Line: line, Side: side, CommitID: commitSHA}
+	if len(bytes.TrimSpace(stdout)) > 0 {
+		if err := json.Unmarshal(stdout, &comment); err != nil {
+			return PullRequestReviewComment{}, fmt.Errorf("decode gh api pull request diff comment response: %w", err)
 		}
 	}
 	return comment, nil

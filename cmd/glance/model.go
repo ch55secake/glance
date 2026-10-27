@@ -20,87 +20,93 @@ const dashboardLoadTimeout = 2 * time.Minute
 const defaultPRQuery = "is:pr is:open author:@me"
 
 type model struct {
-	width                int
-	height               int
-	activeSection        int
-	theme                string
-	themePickerOpen      bool
-	themePickerSelection int
-	themeConfigError     string
-	loading              bool
-	viewer               githubapi.User
-	apiError             string
-	pullRequests         []githubapi.PullRequest
-	selectedPR           int
-	issues               []githubapi.Issue
-	issueError           string
-	selectedIssue        int
-	notifications        []githubapi.Notification
-	notificationError    string
-	selectedNotification int
-	inboxPreviewFocus    bool
-	inboxPreviewScroll   int
-	inboxLines           []string
-	inboxLinesKey        string
-	inboxLinesWidth      int
-	query                string
-	searchDraft          string
-	searchCursor         int
-	searchOffset         int
-	searching            bool
-	showHelp             bool
-	helpScroll           int
-	paletteOpen          bool
-	paletteQuery         string
-	paletteSelection     int
-	requestID            int
-	prRequestID          int
-	prLoading            bool
-	detailOpen           bool
-	detailLoading        bool
-	detailRequestID      int
-	detailKey            string
-	detailError          string
-	detailScroll         int
-	detailLines          []string
-	detailLinesWidth     int
-	reviewFiles          []reviewFileAnchor
-	reviewedFiles        map[string]reviewedFileSnapshot
-	diffFileSnapshots    []reviewedFileSnapshot
-	pendingReviewPath    string
-	pendingReviewOffset  int
-	filePickerOpen       bool
-	filePickerQuery      string
-	filePickerSelection  int
-	sidebarScroll        int
-	sidebarFocus         bool
-	prDetails            githubapi.PullRequestDetails
-	previewCache         map[string]githubapi.PullRequestDetails
-	previewErrors        map[string]string
-	previewPending       map[string]bool
-	previewOrder         []string
-	previewEpoch         int
-	diffLoading          bool
-	diffLoaded           bool
-	diffRequestID        int
-	diffError            string
-	diffFiles            []githubapi.PullRequestFile
-	mergeDialog          mergeDialogState
-	mergeMethodIndex     int
-	mergeMethod          githubapi.MergeMethod
-	mergeInProgress      bool
-	mergeRequestID       int
-	mergeError           string
-	mergeNotice          string
-	commentComposerOpen  bool
-	commentDraft         string
-	commentCursor        int
-	commentScroll        int
-	commentSending       bool
-	commentRequestID     int
-	commentError         string
-	commentNotice        string
-	client               *githubapi.Client
+	width                   int
+	height                  int
+	activeSection           int
+	theme                   string
+	themePickerOpen         bool
+	themePickerSelection    int
+	themeConfigError        string
+	loading                 bool
+	viewer                  githubapi.User
+	apiError                string
+	pullRequests            []githubapi.PullRequest
+	selectedPR              int
+	issues                  []githubapi.Issue
+	issueError              string
+	selectedIssue           int
+	notifications           []githubapi.Notification
+	notificationError       string
+	selectedNotification    int
+	inboxPreviewFocus       bool
+	inboxPreviewScroll      int
+	inboxLines              []string
+	inboxLinesKey           string
+	inboxLinesWidth         int
+	query                   string
+	searchDraft             string
+	searchCursor            int
+	searchOffset            int
+	searching               bool
+	showHelp                bool
+	helpScroll              int
+	paletteOpen             bool
+	paletteQuery            string
+	paletteSelection        int
+	requestID               int
+	prRequestID             int
+	prLoading               bool
+	detailOpen              bool
+	detailLoading           bool
+	detailRequestID         int
+	detailKey               string
+	detailError             string
+	detailScroll            int
+	detailLines             []string
+	detailLinesWidth        int
+	reviewFiles             []reviewFileAnchor
+	reviewedFiles           map[string]reviewedFileSnapshot
+	diffFileSnapshots       []reviewedFileSnapshot
+	pendingReviewPath       string
+	pendingReviewOffset     int
+	filePickerOpen          bool
+	filePickerQuery         string
+	filePickerSelection     int
+	inlineCommentPickerOpen bool
+	inlineCommentQuery      string
+	inlineCommentSelection  int
+	inlineCommentTargets    []inlineCommentTarget
+	sidebarScroll           int
+	sidebarFocus            bool
+	prDetails               githubapi.PullRequestDetails
+	previewCache            map[string]githubapi.PullRequestDetails
+	previewErrors           map[string]string
+	previewPending          map[string]bool
+	previewOrder            []string
+	previewEpoch            int
+	diffLoading             bool
+	diffLoaded              bool
+	diffRequestID           int
+	diffError               string
+	diffFiles               []githubapi.PullRequestFile
+	commentOnDiff           bool
+	commentTarget           inlineCommentTarget
+	mergeDialog             mergeDialogState
+	mergeMethodIndex        int
+	mergeMethod             githubapi.MergeMethod
+	mergeInProgress         bool
+	mergeRequestID          int
+	mergeError              string
+	mergeNotice             string
+	commentComposerOpen     bool
+	commentDraft            string
+	commentCursor           int
+	commentScroll           int
+	commentSending          bool
+	commentRequestID        int
+	commentError            string
+	commentNotice           string
+	client                  *githubapi.Client
 }
 
 type dashboardLoadedMsg struct {
@@ -144,10 +150,13 @@ type pullRequestMergedMsg struct {
 }
 
 type pullRequestCommentPostedMsg struct {
-	requestID int
-	key       string
-	comment   githubapi.PullRequestComment
-	err       error
+	requestID     int
+	key           string
+	comment       githubapi.PullRequestComment
+	reviewComment githubapi.PullRequestReviewComment
+	target        inlineCommentTarget
+	inline        bool
+	err           error
 }
 
 type mergeDialogState int
@@ -241,6 +250,12 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	m.commentSending = false
 	m.commentError = ""
 	m.commentNotice = ""
+	m.inlineCommentPickerOpen = false
+	m.inlineCommentQuery = ""
+	m.inlineCommentSelection = 0
+	m.inlineCommentTargets = nil
+	m.commentOnDiff = false
+	m.commentTarget = inlineCommentTarget{}
 	m.mergeDialog = noMergeDialog
 	m.mergeInProgress = false
 	m.detailScroll = 0
@@ -257,6 +272,7 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	m.diffLoaded = false
 	m.diffError = ""
 	m.diffFiles = nil
+	m.inlineCommentTargets = nil
 	m.detailRequestID++
 	return tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
 }
@@ -399,6 +415,8 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.canCommentOnPullRequest() {
 			m.openCommentComposer()
 		}
+	case "C":
+		m.openInlineCommentPicker()
 	case "up", "k":
 		if m.sidebarFocus {
 			m.sidebarScroll = max(0, m.sidebarScroll-1)
@@ -451,6 +469,7 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.diffLoaded = false
 			m.diffError = ""
 			m.diffFiles = nil
+			m.inlineCommentTargets = nil
 			m.detailRequestID++
 			m.cacheDetailLines()
 			return m, tea.Batch(m.loadPullRequestDetails(), m.loadPullRequestFiles())
@@ -676,6 +695,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.diffError = safeText(msg.err.Error())
 			m.diffLoaded = false
+			m.inlineCommentTargets = nil
 			m.detailLines = nil
 			m.cacheDetailLines()
 			m.restoreReviewPosition(file, offset)
@@ -686,6 +706,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffFiles = msg.files
 		m.diffLoaded = true
 		m.diffError = ""
+		m.inlineCommentTargets = buildInlineCommentTargets(msg.files)
 		m.detailLines = nil
 		m.cacheDetailLines()
 		m.restoreReviewPosition(file, offset)
@@ -727,6 +748,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commentScroll = 0
 		m.commentError = ""
 		m.commentNotice = "Comment posted on " + safeText(msg.key) + "."
+		if msg.inline {
+			m.commentNotice = fmt.Sprintf("Inline comment posted on %s %s.", safeText(msg.target.path), msg.target.label())
+		}
+		m.commentOnDiff = false
+		m.commentTarget = inlineCommentTarget{}
 	case autoRefreshMsg:
 		nextRefresh := scheduleAutoRefresh()
 		if m.loading || m.prLoading || m.mergeInProgress || m.mergeDialog != noMergeDialog || m.commentSending {
@@ -734,6 +760,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(nextRefresh, m.startDashboardRefresh())
 	case tea.KeyMsg:
+		if m.inlineCommentPickerOpen {
+			return m.updateInlineCommentPickerKey(msg)
+		}
 		if m.commentComposerOpen {
 			return m.updateCommentComposerKey(msg)
 		}
