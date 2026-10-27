@@ -762,7 +762,7 @@ func renderDiffPatch(patch string, width int, lexer chroma.Lexer) []string {
 		}
 		gutter := fmt.Sprintf("%4s %4s │ ", oldNumber, newNumber)
 		available := max(1, width-lipgloss.Width(gutter))
-		for i, part := range wrapDiffLine(line, available) {
+		for i, part := range wrapDiffWords(line, available) {
 			prefix := gutter
 			if i > 0 {
 				prefix = strings.Repeat(" ", lipgloss.Width(gutter)-2) + "↳ "
@@ -820,6 +820,50 @@ func wrapDiffLine(line string, width int) []string {
 		used += charWidth
 	}
 	return append(parts, current.String())
+}
+
+// wrapDiffWords keeps prose and identifiers intact when there is a nearby
+// whitespace boundary; long unbroken tokens still hard-wrap to fit the pane.
+func wrapDiffWords(line string, width int) []string {
+	width = max(1, width)
+	runes := []rune(line)
+	var parts []string
+	for start := 0; start < len(runes); {
+		used, end, lastBreak := 0, start, -1
+		hasText := false
+		for end < len(runes) {
+			charWidth := lipgloss.Width(string(runes[end]))
+			if end > start && used+charWidth > width {
+				break
+			}
+			used += charWidth
+			end++
+			if unicode.IsSpace(runes[end-1]) {
+				if hasText {
+					lastBreak = end
+				}
+			} else {
+				hasText = true
+			}
+		}
+		if end == len(runes) {
+			parts = append(parts, string(runes[start:end]))
+			break
+		}
+		split := end
+		if lastBreak > start {
+			split = lastBreak
+		}
+		if split == start {
+			split = end
+		}
+		parts = append(parts, string(runes[start:split]))
+		start = split
+	}
+	if len(parts) == 0 {
+		return []string{""}
+	}
+	return parts
 }
 
 func mergeMethodLabel(method githubapi.MergeMethod) string {

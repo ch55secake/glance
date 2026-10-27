@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func TestWideInboxWorkspaceTracksSelection(t *testing.T) {
@@ -215,6 +216,32 @@ func TestPreviewMarkdownPreservesLineBreaksAndWraps(t *testing.T) {
 		if lipgloss.Width(line) > 40 || strings.Contains(line, "\x1b[31m") {
 			t.Errorf("preview text escaped its pane: %q", line)
 		}
+	}
+}
+
+func TestPreviewMarkdownUsesPaneWidthWithoutExtraLeftIndent(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	lines := previewMarkdown(strings.Repeat("Readable prose fills the available pane width. ", 4), 40)
+	if len(lines) < 2 {
+		t.Fatalf("long prose was not wrapped: %#v", lines)
+	}
+	first := ansi.Strip(lines[0])
+	if strings.HasPrefix(first, " ") || !strings.HasPrefix(first, "Readable prose") {
+		t.Fatalf("preview prose has unnecessary left padding: %q", first)
+	}
+	widest := 0
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > widest {
+			widest = width
+		}
+		if lipgloss.Width(line) > 40 {
+			t.Errorf("prose exceeds pane width: %q", line)
+		}
+	}
+	if widest < 34 {
+		t.Errorf("wrapped prose leaves too much unused width (%d columns): %#v", widest, lines)
 	}
 }
 
