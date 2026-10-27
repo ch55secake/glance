@@ -65,6 +65,12 @@ func (m model) paletteActions() []paletteAction {
 				func(m *model) tea.Cmd { m.openCommentComposer(); return nil },
 			})
 		}
+		if m.canCommentOnDiff() {
+			actions = append(actions, paletteAction{
+				"Comment on a diff line", "Choose a changed line to anchor a review comment", "C",
+				func(m *model) tea.Cmd { m.openInlineCommentPicker(); return nil },
+			})
+		}
 	}
 	actions = append(actions,
 		paletteAction{"My pull requests", "Show open PRs authored by you", "", func(m *model) tea.Cmd { return m.applyPRQuery(defaultPRQuery) }},

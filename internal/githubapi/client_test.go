@@ -236,6 +236,48 @@ func TestCreatePullRequestCommentRejectsInvalidReferenceOrBlankBody(t *testing.T
 	}
 }
 
+func TestCreatePullRequestReviewCommentTargetsDiffLine(t *testing.T) {
+	body := "Could this handle an empty value?"
+	runner := &stubRunner{stdout: []byte(`{"id":47,"body":"Could this handle an empty value?","path":"cmd/app.go","line":18,"side":"RIGHT","commit_id":"head123","html_url":"https://github.com/octo/project/pull/42#discussion_r47"}`)}
+	comment, err := NewClientWithRunner(runner).CreatePullRequestReviewComment(context.Background(), "octo", "project", 42, "head123", "cmd/app.go", 18, "RIGHT", body)
+	if err != nil {
+		t.Fatalf("CreatePullRequestReviewComment() error = %v", err)
+	}
+	if comment.ID != 47 || comment.Path != "cmd/app.go" || comment.Line != 18 || comment.Side != "RIGHT" || comment.CommitID != "head123" {
+		t.Fatalf("CreatePullRequestReviewComment() = %+v", comment)
+	}
+	want := [][]string{{
+		"api", "-X", "POST", "-f", "body=" + body, "-f", "commit_id=head123", "-f", "path=cmd/app.go",
+		"-F", "line=18", "-f", "side=RIGHT", "repos/octo/project/pulls/42/comments",
+	}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Errorf("gh calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestCreatePullRequestReviewCommentRejectsInvalidTarget(t *testing.T) {
+	runner := &stubRunner{}
+	client := NewClientWithRunner(runner)
+	for _, tc := range []struct {
+		owner, repository     string
+		number, line          int
+		sha, path, side, body string
+	}{
+		{"octo/team", "project", 42, 18, "head", "app.go", "RIGHT", "comment"},
+		{"octo", "project", 42, 0, "head", "app.go", "RIGHT", "comment"},
+		{"octo", "project", 42, 18, "", "app.go", "RIGHT", "comment"},
+		{"octo", "project", 42, 18, "head", "app.go", "CENTER", "comment"},
+		{"octo", "project", 42, 18, "head", "app.go", "LEFT", "  "},
+	} {
+		if _, err := client.CreatePullRequestReviewComment(context.Background(), tc.owner, tc.repository, tc.number, tc.sha, tc.path, tc.line, tc.side, tc.body); err == nil {
+			t.Errorf("CreatePullRequestReviewComment(%+v) error = nil", tc)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("invalid diff comment invoked gh: %#v", runner.calls)
+	}
+}
+
 func TestMergePullRequestRequiresValidMethodAndHeadSHA(t *testing.T) {
 	runner := &stubRunner{}
 	client := NewClientWithRunner(runner)

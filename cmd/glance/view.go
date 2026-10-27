@@ -26,7 +26,7 @@ func (m model) View() string {
 	if m.width < 30 || m.height < 10 {
 		return m.smallTerminalView()
 	}
-	if m.paletteOpen || m.filePickerOpen || m.themePickerOpen || m.commentComposerOpen {
+	if m.paletteOpen || m.filePickerOpen || m.themePickerOpen || m.commentComposerOpen || m.inlineCommentPickerOpen {
 		return m.modalView()
 	}
 	width := max(1, m.width)
@@ -1061,6 +1061,8 @@ func (m model) message(width int, title, detail, hint string) []string {
 func (m model) footer(width int) string {
 	var hints []shortcut
 	switch {
+	case m.inlineCommentPickerOpen:
+		hints = []shortcut{{"enter", "comment"}, {"esc", "cancel"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
 	case m.commentComposerOpen:
 		hints = []shortcut{{"ctrl+s", "post"}, {"enter", "new line"}, {"esc", "cancel"}, {"ctrl+u", "clear"}}
 	case m.filePickerOpen:
@@ -1080,7 +1082,7 @@ func (m model) footer(width int) string {
 	default:
 		hints = []shortcut{{"↑/↓", "select"}, {"?", "help"}, {":", "commands"}}
 	}
-	if !m.paletteOpen && !m.filePickerOpen && !m.themePickerOpen && !m.commentComposerOpen && !m.searching && !m.showHelp {
+	if !m.paletteOpen && !m.filePickerOpen && !m.themePickerOpen && !m.commentComposerOpen && !m.inlineCommentPickerOpen && !m.searching && !m.showHelp {
 		if m.hasInboxPreview() && !m.inboxPreviewFocus {
 			hints = append(hints, shortcut{"tab", "preview"})
 		}

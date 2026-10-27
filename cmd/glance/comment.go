@@ -23,6 +23,8 @@ func (m *model) openCommentComposer() {
 	m.commentScroll = 0
 	m.commentError = ""
 	m.commentNotice = ""
+	m.commentOnDiff = false
+	m.commentTarget = inlineCommentTarget{}
 }
 
 func (m *model) postPullRequestComment() tea.Cmd {
@@ -37,15 +39,20 @@ func (m *model) postPullRequestComment() tea.Cmd {
 	}
 	m.commentRequestID++
 	requestID, key, client := m.commentRequestID, m.detailKey, m.client
+	inline, target, commitSHA := m.commentOnDiff, m.commentTarget, m.prDetails.Head.SHA
 	owner, repository, number, err := parsePullRequestKey(key)
 	m.commentSending = true
 	m.commentError = ""
 	return func() tea.Msg {
 		if err != nil {
-			return pullRequestCommentPostedMsg{requestID: requestID, key: key, err: err}
+			return pullRequestCommentPostedMsg{requestID: requestID, key: key, inline: inline, target: target, err: err}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), dashboardLoadTimeout)
 		defer cancel()
+		if inline {
+			comment, err := client.CreatePullRequestReviewComment(ctx, owner, repository, number, commitSHA, target.path, target.line, target.side, body)
+			return pullRequestCommentPostedMsg{requestID: requestID, key: key, reviewComment: comment, inline: true, target: target, err: err}
+		}
 		comment, err := client.CreatePullRequestComment(ctx, owner, repository, number, body)
 		return pullRequestCommentPostedMsg{requestID: requestID, key: key, comment: comment, err: err}
 	}
@@ -69,6 +76,8 @@ func (m model) updateCommentComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.commentCursor = 0
 		m.commentScroll = 0
 		m.commentError = ""
+		m.commentOnDiff = false
+		m.commentTarget = inlineCommentTarget{}
 	case "ctrl+s":
 		return m, m.postPullRequestComment()
 	case "enter":
@@ -202,7 +211,11 @@ func (m *model) moveCommentCursorVertically(direction int) {
 }
 
 func (m model) commentViewportRows() int {
-	return max(1, min(8, m.height-14))
+	reserved := 14
+	if m.commentOnDiff {
+		reserved += max(0, m.commentTarget.previewLineCount(m.height)-1)
+	}
+	return max(1, min(8, m.height-reserved))
 }
 
 func (m *model) keepCommentCursorVisible() {
@@ -236,15 +249,23 @@ func (m model) commentComposerView(width int) []string {
 	cardWidth := min(width, 72)
 	inner := max(1, cardWidth-6)
 	heading := "COMMENT ON PULL REQUEST"
+	if m.commentOnDiff {
+		heading = "COMMENT ON DIFF LINE"
+	}
 	if cardWidth < 34 {
 		heading = "COMMENT"
 	}
 	draftLines := m.commentEditorLines(inner)
 	visible := min(len(draftLines), m.commentViewportRows())
 	start := min(max(0, m.commentScroll), max(0, len(draftLines)-visible))
-	content := []string{
-		accentStyle.Render(heading),
-		mutedStyle.Render(clipLine(fmt.Sprintf("%s  ·  %s", m.detailKey, safeText(m.prDetails.Title)), inner)),
+	context := fmt.Sprintf("%s  ·  %s", m.detailKey, safeText(m.prDetails.Title))
+	content := []string{accentStyle.Render(heading)}
+	if m.commentOnDiff {
+		context = fmt.Sprintf("%s  ·  %s", safeText(m.commentTarget.path), m.commentTarget.label())
+		content = append(content, mutedStyle.Render(clipLine(context, inner)))
+		content = append(content, m.commentTarget.previewView(inner, m.commentTarget.previewLineCount(m.height))...)
+	} else {
+		content = append(content, mutedStyle.Render(clipLine(context, inner)))
 	}
 	if m.height >= 14 {
 		content = append(content, "", mutedStyle.Render("Markdown supported · blank lines preserved"))

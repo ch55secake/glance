@@ -40,7 +40,8 @@ func panel(width, height int, title, status string, content []string, focused bo
 // ANSI-aware cuts preserve cell positions even with wide glyphs at the card edge.
 func (m model) modalView() string {
 	background := m
-	background.paletteOpen, background.filePickerOpen, background.themePickerOpen, background.commentComposerOpen = false, false, false, false
+	background.paletteOpen, background.filePickerOpen, background.themePickerOpen = false, false, false
+	background.commentComposerOpen, background.inlineCommentPickerOpen = false, false
 	lines := strings.Split(background.View(), "\n")
 	for len(lines) < m.height {
 		lines = append(lines, "")
@@ -57,6 +58,9 @@ func (m model) modalView() string {
 	} else if m.filePickerOpen {
 		cardWidth = min(width, 100)
 		card = m.filePickerView(width)
+	} else if m.inlineCommentPickerOpen {
+		cardWidth = min(width, 88)
+		card = m.inlineCommentPickerView(width)
 	} else if m.commentComposerOpen {
 		card = m.commentComposerView(width)
 	} else {

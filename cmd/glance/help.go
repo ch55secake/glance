@@ -28,6 +28,7 @@ func (m model) helpContent(width int) []string {
 			{"f", "Find a changed file by path"}, {"[ / ]", "Jump to the previous / next file"},
 			{"d", "Jump straight to the diff"}, {"v", "Toggle viewed for the current file (local)"},
 			{"c", "Write a conversation comment on this PR"},
+			{"C", "Choose a changed line for an inline comment"},
 			{"m", "Choose a merge method, then confirm"}, {"/", "Return to editing the GitHub filter"}, {"esc", "Return to the inbox"},
 		}})
 	} else {

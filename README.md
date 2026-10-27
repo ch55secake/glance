@@ -96,6 +96,7 @@ code. A sticky file header keeps the current path visible as you scroll.
 | `[` / `]` | Previous / next changed file |
 | `d` | Jump to the first file in the diff |
 | `v` | Toggle the current file as viewed locally |
+| `C` | Choose a changed line for an inline review comment |
 | `c` | Write a conversation comment on the pull request |
 
 The file picker shows change counts and viewed markers, including files whose
@@ -118,6 +119,8 @@ Press `c` or choose **Comment on pull request** from `:` to write a Markdown
 conversation comment. Press `enter` for a new line and `ctrl+s` to post it; the
 comment is sent through GitHub CLI using your existing authentication. `esc`
 cancels the draft.
+Press `C` or choose **Comment on a diff line** from `:` to select a changed line
+and attach an inline review comment to that file and line.
 
 Build the executable with:
 
