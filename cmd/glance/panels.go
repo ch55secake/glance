@@ -14,7 +14,9 @@ func panel(width, height int, title, status string, content []string, focused bo
 	border := lipgloss.NewStyle().Foreground(lipgloss.Color(themeBorderColor))
 	if focused {
 		border = accentStyle
-		title = "▎ " + title
+		if title != "" {
+			title = "▎ " + title
+		}
 	}
 	cap := func(left, right, label string) string {
 		label = clipLine(label, width-6)

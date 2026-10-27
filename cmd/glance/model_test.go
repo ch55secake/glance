@@ -265,13 +265,13 @@ func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 		}
 	}
 	m.selectedPR = 1
-	if view := m.View(); !strings.Contains(view, "SELECTED  2 / 2") {
+	if view := m.View(); !strings.Contains(view, "2 of 2") {
 		t.Errorf("list footer does not show selection: %s", view)
 	}
 	m.query = "is:pr is:open draft:true"
 	m.pullRequests = m.pullRequests[1:]
 	m.selectedPR = 0
-	if view := m.View(); !strings.Contains(view, "1 found") || !strings.Contains(view, "SELECTED  1 / 1") {
+	if view := m.View(); !strings.Contains(view, "1 found") || !strings.Contains(view, "1 of 1") {
 		t.Errorf("filtered list does not show its size and selection: %s", view)
 	}
 }
@@ -289,7 +289,7 @@ func TestPullRequestListSelectionVisibleWithoutColor(t *testing.T) {
 	}
 	m.selectedPR = 1
 	view := m.View()
-	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "SELECTED  2 / 2") {
+	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "2 of 2") {
 		t.Errorf("monochrome list lost the selection marker or position: %s", view)
 	}
 }
@@ -1173,7 +1173,7 @@ func TestInboxLayoutFramesPanesAndKeepsTitleFirst(t *testing.T) {
 				}
 			}
 			view := strings.Join(lines, "\n")
-			if width >= 80 && (!strings.Contains(view, "╭─ ▎ INBOX") || !strings.Contains(view, "╭─ SELECTED")) {
+			if width >= 80 && (!strings.Contains(view, "╭─ ▎ INBOX") || strings.Count(view, "╭") < 2 || strings.Contains(view, "PREVIEW")) {
 				t.Errorf("section %d at width %d lost framed list and preview: %s", tc.section, width, view)
 			}
 			if title, context := strings.Index(view, tc.title), strings.Index(view, tc.context); title < 0 || context < title {

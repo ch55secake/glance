@@ -71,7 +71,7 @@ func TestInboxPagingAndDirectSectionShortcuts(t *testing.T) {
 	m := populatedWorkspace()
 	start := m.selectedPR
 	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.selectedPR <= start+1 || !strings.Contains(m.View(), fmt.Sprintf("SELECTED  %d / 20", m.selectedPR+1)) {
+	if m.selectedPR <= start+1 || !strings.Contains(m.View(), fmt.Sprintf("%d of 20", m.selectedPR+1)) {
 		t.Fatal("page down did not move the list and keep its selection visible")
 	}
 	m = applyKeys(m, key("2"), tea.KeyMsg{Type: tea.KeyEnd}, tea.KeyMsg{Type: tea.KeyTab}, tea.KeyMsg{Type: tea.KeyEnd})
@@ -105,7 +105,7 @@ func TestInboxPreviewRefreshAndResizeKeepValidPosition(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
 	m = updated.(model)
-	if m.inboxPreviewFocus || strings.Contains(m.View(), "SELECTED") {
+	if m.inboxPreviewFocus || strings.Contains(m.View(), "PREVIEW") {
 		t.Fatal("narrow resize left focus on a hidden preview")
 	}
 	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyTab})
