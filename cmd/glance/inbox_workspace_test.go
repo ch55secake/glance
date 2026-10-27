@@ -26,8 +26,8 @@ func TestWideInboxWorkspaceTracksSelection(t *testing.T) {
 			}
 			m.setSelection(17)
 			view := m.View()
-			if strings.Contains(view, "SELECTED") || !strings.Contains(view, "18 of 18") ||
-				!strings.Contains(view, "╭─ PREVIEW") ||
+			if strings.Contains(view, "SELECTED") || strings.Contains(view, "PREVIEW") ||
+				!strings.Contains(view, "18 of 18") || strings.Count(view, "╭") < 2 ||
 				!strings.Contains(view, "▸ "+[]string{"Review PR 18", "Resolve issue 18", "Thread 18"}[section]) ||
 				(section != 2 && !strings.Contains(view, "team/repo#18")) {
 				t.Errorf("%dx%d section %d lost selected item: %s", size.width, size.height, section, view)
@@ -59,7 +59,7 @@ func TestInboxWorkspaceFallsBackOnNarrowTerminals(t *testing.T) {
 		t.Fatalf("narrow list lost its single-column layout: %s", view)
 	}
 	m.width = 80
-	if view := m.View(); !strings.Contains(view, "PREVIEW") || !strings.Contains(view, "team/repo#42") {
+	if view := m.View(); strings.Contains(view, "PREVIEW") || strings.Contains(view, "SELECTED") || !strings.Contains(view, "team/repo#42") {
 		t.Fatalf("wide list did not switch to the workspace: %s", view)
 	}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})

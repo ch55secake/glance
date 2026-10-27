@@ -1173,7 +1173,7 @@ func TestInboxLayoutFramesPanesAndKeepsTitleFirst(t *testing.T) {
 				}
 			}
 			view := strings.Join(lines, "\n")
-			if width >= 80 && (!strings.Contains(view, "╭─ ▎ INBOX") || !strings.Contains(view, "╭─ PREVIEW")) {
+			if width >= 80 && (!strings.Contains(view, "╭─ ▎ INBOX") || strings.Count(view, "╭") < 2 || strings.Contains(view, "PREVIEW")) {
 				t.Errorf("section %d at width %d lost framed list and preview: %s", tc.section, width, view)
 			}
 			if title, context := strings.Index(view, tc.title), strings.Index(view, tc.context); title < 0 || context < title {

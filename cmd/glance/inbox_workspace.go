@@ -275,7 +275,7 @@ func (m model) workspace(width int, items []workspaceItem, selected int) []strin
 		hint = "esc list"
 	}
 	status := hint + " · " + scrollPosition(previewStart, m.inboxPreviewHeight(), len(preview))
-	right := panel(previewWidth+4, height, "PREVIEW", status,
+	right := panel(previewWidth+4, height, "", status,
 		preview[previewStart:min(len(preview), previewStart+m.inboxPreviewHeight())], m.inboxPreviewFocus && !m.searching)
 	lines := make([]string, height)
 	for row := range lines {
