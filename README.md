@@ -46,7 +46,7 @@ Narrow terminals use a single column. Shortcut hints stay pinned at the bottom.
 | `:` | Search the command palette |
 | `t` | Open the theme switcher |
 | `?` | Open scrollable keyboard help, including during PR review |
-| `r` / `q` | Refresh / quit |
+| `r` / `q` | Refresh now / quit |
 
 The palette matches words in command names and descriptions. Use up/down,
 `tab`/`shift+tab`, or `ctrl+n`/`ctrl+p` to select a command, `enter` to run it,
@@ -62,6 +62,8 @@ after a short pause and are cached while browsing. Focus its preview to scroll
 through the full content. PR and issue descriptions render Markdown, including
 lists and code, while preserving authored line breaks. Issues include labels
 and comment counts; notifications explain why each thread is in your inbox.
+All inboxes refresh automatically every five minutes, preserving the applied PR
+filter and current selection when it still exists. Press `r` to refresh sooner.
 
 ### GitHub filters
 
