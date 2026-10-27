@@ -113,6 +113,10 @@ stay pinned. Press `m` or choose **Merge pull request** from `:` to select an
 enabled merge method with up/down or `j`/`k`, press `enter`, then confirm with `y`.
 glance sends the merge through the GitHub API using the loaded head SHA and
 refreshes the dashboard afterwards.
+When GitHub reports that a PR branch is behind its base, glance shows an update
+prompt; press `u` or choose **Update pull request branch** from `:`. glance asks
+GitHub to update the branch using the loaded head SHA and checks the resulting
+branch status.
 
 Build the executable with:
 

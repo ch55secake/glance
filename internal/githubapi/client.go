@@ -125,6 +125,12 @@ type MergeResult struct {
 	Message string `json:"message"`
 }
 
+// BranchUpdateResult is GitHub's accepted response to updating a PR branch.
+type BranchUpdateResult struct {
+	Message string `json:"message"`
+	URL     string `json:"url"`
+}
+
 type repositoryMergeSettings struct {
 	AllowMergeCommit bool `json:"allow_merge_commit"`
 	AllowSquashMerge bool `json:"allow_squash_merge"`
@@ -624,6 +630,37 @@ func (c *Client) MergePullRequest(ctx context.Context, owner, repository string,
 			message = "GitHub did not merge the pull request. Check required reviews, status checks, branch protection, and merge conflicts."
 		}
 		return result, errors.New(message)
+	}
+	return result, nil
+}
+
+// UpdatePullRequestBranch asks GitHub to merge the base branch into the PR's
+// head branch, guarded by the expected head SHA so a stale view cannot update a
+// different commit than the one the user reviewed.
+func (c *Client) UpdatePullRequestBranch(ctx context.Context, owner, repository string, number int, expectedSHA string) (BranchUpdateResult, error) {
+	if !validPathSegment(owner) || !validPathSegment(repository) || number < 1 {
+		return BranchUpdateResult{}, errors.New("GitHub owner, repository, and pull request number must be valid")
+	}
+	if strings.TrimSpace(expectedSHA) == "" {
+		return BranchUpdateResult{}, errors.New("a current pull request head SHA is required to update its branch")
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/update-branch", url.PathEscape(owner), url.PathEscape(repository), number)
+	stdout, stderr, err := c.runner.Run(ctx,
+		"api", "-X", "PUT",
+		"-F", "expected_head_sha="+expectedSHA,
+		endpoint,
+	)
+	if err != nil {
+		return BranchUpdateResult{}, fmt.Errorf("update pull request branch: %w", newCommandError(stderr, err))
+	}
+	var result BranchUpdateResult
+	if len(bytes.TrimSpace(stdout)) > 0 {
+		if err := json.Unmarshal(stdout, &result); err != nil {
+			return BranchUpdateResult{}, fmt.Errorf("decode gh api branch update response: %w", err)
+		}
+	}
+	if result.Message == "" {
+		result.Message = "GitHub accepted the branch update request."
 	}
 	return result, nil
 }
