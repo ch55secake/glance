@@ -149,7 +149,7 @@ func initialModel() model {
 }
 
 func (m model) Init() tea.Cmd {
-	return m.loadDashboard()
+	return tea.Batch(m.loadDashboard(), scheduleAutoRefresh())
 }
 
 func (m model) loadDashboard() tea.Cmd {
@@ -181,6 +181,18 @@ func (m model) loadDashboard() tea.Cmd {
 		requests.Wait()
 		return result
 	}
+}
+
+func (m *model) startDashboardRefresh() tea.Cmd {
+	m.clearPRPreviews()
+	m.loading = true
+	m.prLoading = true
+	m.apiError = ""
+	m.issueError = ""
+	m.notificationError = ""
+	m.requestID++
+	m.prRequestID++
+	return m.loadDashboard()
 }
 
 func (m model) searchPullRequests() tea.Cmd {
@@ -670,6 +682,12 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailLines = nil
 		m.cacheDetailLines()
 		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
+	case autoRefreshMsg:
+		nextRefresh := scheduleAutoRefresh()
+		if m.loading || m.prLoading || m.mergeInProgress || m.mergeDialog != noMergeDialog {
+			return m, nextRefresh
+		}
+		return m, tea.Batch(nextRefresh, m.startDashboardRefresh())
 	case tea.KeyMsg:
 		if m.themePickerOpen {
 			return m.updateThemePickerKey(msg)
@@ -815,15 +833,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.loading {
 				break
 			}
-			m.clearPRPreviews()
-			m.loading = true
-			m.prLoading = true
-			m.apiError = ""
-			m.issueError = ""
-			m.notificationError = ""
-			m.requestID++
-			m.prRequestID++
-			return m, m.loadDashboard()
+			return m, m.startDashboardRefresh()
 		}
 	}
 

@@ -125,11 +125,8 @@ func TestInitLoadsViewerThroughGhAPI(t *testing.T) {
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
 
-	result := m.Init()()
-	msg, ok := result.(dashboardLoadedMsg)
-	if !ok {
-		t.Fatalf("Init() message = %T, want dashboardLoadedMsg", result)
-	}
+	result := runInitialDashboard(t, m)
+	msg := result
 	if msg.err != nil {
 		t.Fatalf("Init() error = %v", msg.err)
 	}
@@ -173,10 +170,7 @@ func TestInitLoadsIssuesAndNotifications(t *testing.T) {
 	}}
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
-	msg, ok := m.Init()().(dashboardLoadedMsg)
-	if !ok {
-		t.Fatal("Init() did not return dashboardLoadedMsg")
-	}
+	msg := runInitialDashboard(t, m)
 	if msg.err != nil || msg.pullRequestErr != nil || msg.issueErr != nil || msg.notificationErr != nil {
 		t.Fatalf("dashboard loading errors = viewer:%v PR:%v issue:%v notifications:%v", msg.err, msg.pullRequestErr, msg.issueErr, msg.notificationErr)
 	}
@@ -196,12 +190,27 @@ func TestGhAuthenticationErrorIsShownInPRInbox(t *testing.T) {
 	}
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
-	msg := m.Init()().(dashboardLoadedMsg)
+	msg := runInitialDashboard(t, m)
 	updated, _ := m.Update(msg)
 
 	if view := updated.(model).View(); !strings.Contains(view, "gh auth login") {
 		t.Errorf("view %q does not show gh auth login guidance", view)
 	}
+}
+
+func runInitialDashboard(t *testing.T, m model) dashboardLoadedMsg {
+	t.Helper()
+	result := m.Init()()
+	batch, ok := result.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("Init() message = %T, want dashboard load and auto-refresh timer", result)
+	}
+	loaded := batch[0]()
+	message, ok := loaded.(dashboardLoadedMsg)
+	if !ok {
+		t.Fatalf("initial dashboard command returned %T, want dashboardLoadedMsg", loaded)
+	}
+	return message
 }
 
 func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
