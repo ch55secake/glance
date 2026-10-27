@@ -606,15 +606,18 @@ func (m model) reviewSidebar(width, height int) []string {
 	return lines
 }
 
-// mergeActionPanel stays below the scrollable PR content so the next action and
-// any result remain visible even at the bottom of a long diff.
+// Keep merge prompts and results pinned, but leave the ordinary diff view free
+// of a permanent shortcut footer.
 func (m model) mergeActionPanel(width int) []string {
-	lines := []string{"  " + mutedStyle.Render(strings.Repeat("─", width))}
+	lines := make([]string, 0, 8)
 	if m.mergeError != "" {
 		lines = append(lines, panelMessage("Merge: "+m.mergeError, width, errorStyle)...)
 	}
 	if m.mergeNotice != "" {
 		lines = append(lines, panelMessage(m.mergeNotice, width, goodStyle)...)
+	}
+	if m.mergeInProgress || m.mergeDialog != noMergeDialog || len(lines) > 0 {
+		lines = append([]string{"  " + mutedStyle.Render(strings.Repeat("─", width))}, lines...)
 	}
 	switch {
 	case m.mergeInProgress:
@@ -638,24 +641,7 @@ func (m model) mergeActionPanel(width int) []string {
 		)
 		return lines
 	default:
-		actions := "◆ ACTIONS  ·  m merge  ·  r refresh  ·  esc back"
-		guidance := "f files  ·  [/] jump  ·  v viewed  ·  ↑/↓ scroll  ·  ? help"
-		if width < 45 {
-			actions = "◆ ACTIONS  ·  m merge"
-			guidance = "esc back  ·  f files"
-		} else if width < 70 {
-			actions = "◆ ACTIONS  ·  m merge  ·  esc back"
-			guidance = "f files  ·  [/] jump  ·  v viewed"
-		} else if m.hasReviewSidebar() {
-			guidance = "f files  ·  [/] jump  ·  v viewed  ·  tab switch pane  ·  PgUp/PgDn page  ·  ? help"
-		}
-		if width >= 70 {
-			actions += "  ·  : commands"
-		}
-		return append(lines,
-			"  "+accentStyle.Render(clipLine(actions, width)),
-			"  "+mutedStyle.Render(clipLine(guidance, width)),
-		)
+		return lines
 	}
 }
 

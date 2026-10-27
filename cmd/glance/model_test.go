@@ -509,7 +509,7 @@ func TestDiffWrapsLongFilePaths(t *testing.T) {
 	}
 }
 
-func TestMergeActionsStayVisibleWhileScrollingDiff(t *testing.T) {
+func TestMergeActionsRemainAvailableWithoutRoutineDiffFooter(t *testing.T) {
 	m := initialModel()
 	m.width, m.height = 45, 18
 	m.loading = false
@@ -525,8 +525,8 @@ func TestMergeActionsStayVisibleWhileScrollingDiff(t *testing.T) {
 	m.diffFiles = []githubapi.PullRequestFile{{Filename: "src/file.go", Patch: "@@ -1 +1 @@\n" + strings.Repeat("+changed line\n", 35)}}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = updated.(model)
-	if m.detailScroll == 0 || !strings.Contains(m.View(), "ACTIONS") || !strings.Contains(m.View(), "+changed line") {
-		t.Fatalf("scrolling lost actions or diff: %s", m.View())
+	if m.detailScroll == 0 || strings.Contains(m.View(), "ACTIONS") || strings.Contains(m.View(), "m merge") || !strings.Contains(m.View(), "+changed line") {
+		t.Fatalf("diff still shows routine action hints or lost content: %s", m.View())
 	}
 	end := m.detailScroll
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})

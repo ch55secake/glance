@@ -122,7 +122,7 @@ func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 		t.Errorf("review activity is still in the wide diff column: %s", left)
 	}
 	view := m.View()
-	for _, want := range []string{"CHANGED FILES", "READINESS", "blocked (dirty)", "CHECKS", "FAIL  CI check 00", "PASS  CI check 01", "tab switch pane"} {
+	for _, want := range []string{"CHANGED FILES", "READINESS", "blocked (dirty)", "CHECKS", "FAIL  CI check 00", "PASS  CI check 01"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("wide review missing %q:\n%s", want, view)
 		}
@@ -157,7 +157,7 @@ func TestReviewSidebarShowsReadinessAndScrollableChecks(t *testing.T) {
 	}
 }
 
-func TestReviewFocusIsVisualAndControlsLiveInActionPanel(t *testing.T) {
+func TestReviewFocusIsVisualWithoutRoutineFooter(t *testing.T) {
 	previous := lipgloss.ColorProfile()
 	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
 	for _, profile := range []termenv.Profile{termenv.TrueColor, termenv.Ascii} {
@@ -176,9 +176,13 @@ func TestReviewFocusIsVisualAndControlsLiveInActionPanel(t *testing.T) {
 			if len(lines) != m.height {
 				t.Errorf("focus %t: review uses %d rows, want %d", focused, len(lines), m.height)
 			}
-			if strings.Contains(view, "FOCUSED") || strings.Count(view, "m merge") != 1 ||
-				!strings.Contains(view, "tab switch pane") || !strings.Contains(view, "PgUp/PgDn page") {
-				t.Errorf("focus %t: redundant footer or missing pinned controls: %s", focused, view)
+			for _, footerText := range []string{"◆ ACTIONS", "m merge", "tab switch pane", "PgUp/PgDn page", "esc back"} {
+				if strings.Contains(view, footerText) {
+					t.Errorf("focus %t: routine shortcut footer still takes space (%q): %s", focused, footerText, view)
+				}
+			}
+			if strings.Contains(view, "FOCUSED") {
+				t.Errorf("focus %t: pane focus is redundantly labeled: %s", focused, view)
 			}
 			breadcrumb := m.navigation(m.width - 4)
 			sidebar := m.reviewSidebar(32, m.detailViewportHeight())[0]
@@ -201,21 +205,48 @@ func TestReviewFocusIsVisualAndControlsLiveInActionPanel(t *testing.T) {
 	}
 }
 
-func TestReviewActionPanelControlsAcrossWidths(t *testing.T) {
+func TestReviewDiffHasNoPermanentActionFooterAcrossWidths(t *testing.T) {
 	for _, width := range []int{30, 45, 50, 72, 120} {
 		m := initialModel()
 		m.width, m.height = width, 16
 		m.detailOpen = true
 		m.prDetails.Number = 42
 		view := m.View()
-		if !strings.Contains(view, "◆ ACTIONS") || !strings.Contains(view, "esc back") || strings.Count(view, "m merge") != 1 {
-			t.Errorf("review controls are clipped or repeated at width %d: %s", width, view)
+		if strings.Contains(view, "◆ ACTIONS") || strings.Contains(view, "m merge") || strings.Contains(view, "esc back") {
+			t.Errorf("routine review footer remains at width %d: %s", width, view)
+		}
+		if len(strings.Split(view, "\n")) != m.height {
+			t.Errorf("diff does not use the freed rows at width %d: %s", width, view)
 		}
 		for _, line := range strings.Split(view, "\n") {
 			if got := lipgloss.Width(line); got > m.width {
 				t.Errorf("review line exceeds %d columns (%d): %q", m.width, got, line)
 			}
 		}
+	}
+}
+
+func TestMergeRemainsAccessibleInPaletteAndChooserStaysPinned(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 100, 16
+	m.detailOpen = true
+	m.detailKey = "octo/repo#42"
+	m.prDetails = githubapi.PullRequestDetails{
+		PullRequest:         githubapi.PullRequest{Number: 42, State: "open"},
+		Head:                githubapi.PullRequestBranch{SHA: "sha"},
+		AllowedMergeMethods: []githubapi.MergeMethod{githubapi.MergeSquash},
+	}
+	m = applyKeys(m, key(":"), key("merge"), tea.KeyMsg{Type: tea.KeyEnter})
+	if m.paletteOpen || m.mergeDialog != chooseMergeMethod || !strings.Contains(m.View(), "Choose merge method") {
+		t.Fatalf("palette did not launch the pinned merge chooser:\n%s", m.View())
+	}
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != m.height || !strings.Contains(lines[len(lines)-1], "enter continue") {
+		t.Fatalf("merge chooser controls did not stay pinned:\n%s", m.View())
+	}
+	m = applyKeys(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mergeDialog != noMergeDialog || strings.Contains(m.View(), "◆ ACTIONS") {
+		t.Fatal("closing the chooser restored the permanent footer")
 	}
 }
 
