@@ -104,7 +104,9 @@ These markers are local navigation aids and are not submitted to GitHub.
 
 On wide terminals, mergeability, checks, and review activity are in a
 right-hand panel; press `tab` to focus it and use `j`/`k` or `PgUp`/`PgDn` to
-scroll it independently. The active pane is highlighted without a focus label.
+scroll it independently. Check counts summarize results, failures and running
+checks appear first, and recent completion times show when space allows. The
+active pane is highlighted without a focus label.
 On narrow terminals, checks and reviews appear below the diff. The ordinary
 diff view has no permanent shortcut footer; press `?` for controls. Merge prompts
 stay pinned. Press `m` or choose **Merge pull request** from `:` to select an

@@ -71,7 +71,8 @@ func (m model) prPreviewContext(key string, width int) []string {
 			style = errorStyle
 		}
 	}
-	lines = append(lines, style.Render(clipLine(mergeability, width)), textStyle.Render(clipLine(checkSummary(details), width)))
+	checkText, checksStyle := checkSummaryStatus(details)
+	lines = append(lines, style.Render(clipLine(mergeability, width)), checksStyle.Render(clipLine(checkText, width)))
 	status := fmt.Sprintf("Reviews  %d  ·  requested  %d", len(details.Reviews), len(details.RequestedReviewers))
 	if details.ReviewsError != "" {
 		status = "Reviews unavailable"

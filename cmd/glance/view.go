@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -543,10 +544,18 @@ func (m model) checkStatusLines(width int) []string {
 	if len(m.prDetails.CheckRuns) == 0 {
 		return []string{"  " + mutedStyle.Render("No checks reported")}
 	}
-	lines := make([]string, 0, len(m.prDetails.CheckRuns))
-	for _, check := range m.prDetails.CheckRuns {
+	checks := append([]githubapi.CheckRun(nil), m.prDetails.CheckRuns...)
+	sort.SliceStable(checks, func(i, j int) bool {
+		return checkPriority(checks[i]) < checkPriority(checks[j])
+	})
+	lines := []string{"  " + checkStatusSummary(m.prDetails.CheckRuns, width)}
+	for _, check := range checks {
 		label, style := checkStyle(check)
-		parts := wrapDiffLine(safeText(check.Name), max(1, width-lipgloss.Width(label)-2))
+		name := safeText(check.Name)
+		if width >= 55 && check.CompletedAt != nil && !check.CompletedAt.IsZero() {
+			name += "  ·  " + relativeTime(*check.CompletedAt)
+		}
+		parts := wrapDiffWords(name, max(1, width-lipgloss.Width(label)-2))
 		for i, part := range parts {
 			if i == 0 {
 				lines = append(lines, "  "+style.Render(label+"  "+part))
@@ -556,6 +565,59 @@ func (m model) checkStatusLines(width int) []string {
 		}
 	}
 	return lines
+}
+
+func checkPriority(check githubapi.CheckRun) int {
+	switch label, _ := checkStyle(check); label {
+	case "✕ FAIL":
+		return 0
+	case "! CANCEL":
+		return 1
+	case "◌ RUNNING":
+		return 2
+	case "? UNKNOWN":
+		return 3
+	case "– SKIP":
+		return 4
+	default:
+		return 5
+	}
+}
+
+func checkStatusSummary(checks []githubapi.CheckRun, width int) string {
+	counts := countCheckStatuses(checks)
+	styles := make(map[string]lipgloss.Style)
+	for _, check := range checks {
+		label, style := checkStyle(check)
+		styles[label] = style
+	}
+	labels := []string{"✕ FAIL", "! CANCEL", "◌ RUNNING", "? UNKNOWN", "– SKIP", "✓ PASS"}
+	words := map[string]string{
+		"✕ FAIL": "failed", "! CANCEL": "cancelled", "◌ RUNNING": "running",
+		"? UNKNOWN": "unknown", "– SKIP": "skipped", "✓ PASS": "passed",
+	}
+	var detailed, compact []string
+	for _, label := range labels {
+		if counts[label] == 0 {
+			continue
+		}
+		symbol := strings.Fields(label)[0]
+		compact = append(compact, styles[label].Render(fmt.Sprintf("%s%d", symbol, counts[label])))
+		detailed = append(detailed, styles[label].Render(fmt.Sprintf("%s %d %s", symbol, counts[label], words[label])))
+	}
+	if width >= 58 && lipgloss.Width(strings.Join(detailed, "  ")) <= width {
+		return strings.Join(detailed, "  ")
+	}
+	return strings.Join(compact, "  ")
+}
+
+func countCheckStatuses(checks []githubapi.CheckRun) map[string]int {
+	counts := make(map[string]int)
+	for _, check := range checks {
+		label, _ := checkStyle(check)
+		counts[label]++
+	}
+	return counts
 }
 
 func (m model) maxSidebarScroll() int {

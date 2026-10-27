@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"glance/internal/githubapi"
 
@@ -338,12 +339,55 @@ func TestLongCheckNamesWrapWithoutHidingStatus(t *testing.T) {
 	name := "integration/" + strings.Repeat("very-long-check-name/", 3) + "END"
 	m.prDetails.CheckRuns = []githubapi.CheckRun{{Name: name, Conclusion: "failure"}}
 	lines := m.checkStatusLines(30)
-	if !strings.Contains(strings.Join(lines, ""), "END") || !strings.Contains(lines[0], "FAIL") || len(lines) < 2 {
+	if !strings.Contains(strings.Join(lines, ""), "END") || !strings.Contains(strings.Join(lines, ""), "FAIL") || len(lines) < 3 {
 		t.Errorf("check name or status was truncated: %q", lines)
 	}
 	for _, line := range lines {
 		if got := lipgloss.Width(line); got > 32 {
 			t.Errorf("check exceeded sidebar width: %d", got)
+		}
+	}
+}
+
+func TestChecksShowSummaryAndPrioritizeProblems(t *testing.T) {
+	completed := time.Now().Add(-3 * time.Minute)
+	m := initialModel()
+	m.prDetails.CheckRuns = []githubapi.CheckRun{
+		{Name: "Build / test", Conclusion: "success", CompletedAt: &completed},
+		{Name: "Lint", Status: "in_progress"},
+		{Name: "Integration / backend", Conclusion: "failure"},
+		{Name: "Optional", Conclusion: "skipped"},
+	}
+	lines := m.checkStatusLines(78)
+	joined := strings.Join(lines, "\n")
+	for _, summary := range []string{"✕ 1 failed", "◌ 1 running", "– 1 skip", "✓ 1 pass"} {
+		if !strings.Contains(joined, summary) {
+			t.Errorf("check summary missing %q: %s", summary, joined)
+		}
+	}
+	failure := strings.Index(joined, "FAIL  Integration / backend")
+	running := strings.Index(joined, "RUNNING  Lint")
+	passed := strings.Index(joined, "PASS  Build / test")
+	if failure < 0 || running < failure || passed < running {
+		t.Fatalf("checks are not ordered by attention priority: %s", joined)
+	}
+	if !strings.Contains(joined, "ago") {
+		t.Fatalf("completed check time is missing: %s", joined)
+	}
+}
+
+func TestCompactCheckSummaryFitsNarrowReadinessColumn(t *testing.T) {
+	checks := []githubapi.CheckRun{
+		{Conclusion: "failure"}, {Conclusion: "cancelled"}, {Status: "in_progress"},
+		{Conclusion: "neutral"}, {Conclusion: "success"}, {Conclusion: "unknown"},
+	}
+	line := "  " + checkStatusSummary(checks, 26)
+	if lipgloss.Width(line) > 28 {
+		t.Fatalf("compact check summary exceeds readiness column: %q", line)
+	}
+	for _, symbol := range []string{"✕1", "!1", "◌1", "?1", "–1", "✓1"} {
+		if !strings.Contains(line, symbol) {
+			t.Errorf("compact summary lost %s: %q", symbol, line)
 		}
 	}
 }
