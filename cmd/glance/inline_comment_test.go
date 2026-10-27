@@ -22,9 +22,16 @@ func TestBuildInlineCommentTargetsMapsDiffLinesAndSides(t *testing.T) {
 		t.Fatalf("inline targets = %+v, want %+v", targets, want)
 	}
 	for i := range want {
-		if targets[i] != want[i] {
-			t.Errorf("target %d = %+v, want %+v", i, targets[i], want[i])
+		got := targets[i]
+		if got.path != want[i].path || got.line != want[i].line || got.side != want[i].side || got.code != want[i].code || got.change != want[i].change {
+			t.Errorf("target %d = %+v, want path/line/side/code/change %+v", i, got, want[i])
 		}
+	}
+	if targets[0].previewIndex != 1 || len(targets[0].preview) != 3 || targets[0].preview[0].code != "context" || targets[0].preview[2].code != "new value" {
+		t.Errorf("deleted-line preview = %+v, want neighboring context and replacement", targets[0])
+	}
+	if targets[1].previewIndex != 1 || len(targets[1].preview) != 3 || targets[1].preview[0].code != "old value" || targets[1].preview[2].code != "tail" {
+		t.Errorf("added-line preview = %+v, want replacement and neighboring context", targets[1])
 	}
 }
 
@@ -49,11 +56,17 @@ func TestInlineCommentPickerPostsCommentOnSelectedLine(t *testing.T) {
 	m.inlineCommentTargets = buildInlineCommentTargets(m.diffFiles)
 	updated, cmd := m.Update(key("C"))
 	m = updated.(model)
-	if cmd != nil || !m.inlineCommentPickerOpen || !strings.Contains(m.View(), "COMMENT ON CODE") {
+	initialPickerView := m.View()
+	if cmd != nil || !m.inlineCommentPickerOpen || !strings.Contains(initialPickerView, "COMMENT ON CODE") ||
+		!strings.Contains(initialPickerView, "Selected: old line 10 in src/app.go") || !strings.Contains(initialPickerView, "- oldName") {
 		t.Fatalf("C did not open the diff target picker: %s", m.View())
 	}
 	updated, _ = m.Update(key("j"))
 	m = updated.(model)
+	pickerView := m.View()
+	if !strings.Contains(pickerView, "Selected: new line 10 in src/app.go") || !strings.Contains(pickerView, "+ newName") {
+		t.Fatalf("picker does not make the selected source line clear: %s", pickerView)
+	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 	if m.inlineCommentPickerOpen || !m.commentComposerOpen || !m.commentOnDiff || m.commentTarget.side != "RIGHT" || m.commentTarget.line != 10 || m.commentTarget.code != "newName" {
@@ -63,7 +76,7 @@ func TestInlineCommentPickerPostsCommentOnSelectedLine(t *testing.T) {
 	m = updated.(model)
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	m = updated.(model)
-	if cmd == nil || !m.commentSending || !strings.Contains(m.View(), "src/app.go R10") {
+	if cmd == nil || !m.commentSending || !strings.Contains(m.View(), "new line 10") || !strings.Contains(m.View(), "+ newName") {
 		t.Fatalf("inline comment was not submitted with its target visible: %s", m.View())
 	}
 	result, ok := cmd().(pullRequestCommentPostedMsg)

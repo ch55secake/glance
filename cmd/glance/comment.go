@@ -211,7 +211,11 @@ func (m *model) moveCommentCursorVertically(direction int) {
 }
 
 func (m model) commentViewportRows() int {
-	return max(1, min(8, m.height-14))
+	reserved := 14
+	if m.commentOnDiff {
+		reserved += max(0, m.commentTarget.previewLineCount(m.height)-1)
+	}
+	return max(1, min(8, m.height-reserved))
 }
 
 func (m *model) keepCommentCursorVisible() {
@@ -257,18 +261,9 @@ func (m model) commentComposerView(width int) []string {
 	context := fmt.Sprintf("%s  ·  %s", m.detailKey, safeText(m.prDetails.Title))
 	content := []string{accentStyle.Render(heading)}
 	if m.commentOnDiff {
-		context = fmt.Sprintf("%s  ·  %s %s", m.detailKey, safeText(m.commentTarget.path), m.commentTarget.label())
-		codeStyle := textStyle
-		switch m.commentTarget.change {
-		case "added":
-			codeStyle = addLineStyle
-		case "deleted":
-			codeStyle = delLineStyle
-		}
-		content = append(content,
-			mutedStyle.Render(clipLine(context, inner)),
-			codeStyle.Render(clipLine(safeText(m.commentTarget.code), inner)),
-		)
+		context = fmt.Sprintf("%s  ·  %s", safeText(m.commentTarget.path), m.commentTarget.label())
+		content = append(content, mutedStyle.Render(clipLine(context, inner)))
+		content = append(content, m.commentTarget.previewView(inner, m.commentTarget.previewLineCount(m.height))...)
 	} else {
 		content = append(content, mutedStyle.Render(clipLine(context, inner)))
 	}
