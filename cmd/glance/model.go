@@ -92,6 +92,14 @@ type model struct {
 	mergeRequestID       int
 	mergeError           string
 	mergeNotice          string
+	commentComposerOpen  bool
+	commentDraft         string
+	commentCursor        int
+	commentScroll        int
+	commentSending       bool
+	commentRequestID     int
+	commentError         string
+	commentNotice        string
 	client               *githubapi.Client
 }
 
@@ -132,6 +140,13 @@ type pullRequestMergedMsg struct {
 	requestID int
 	key       string
 	result    githubapi.MergeResult
+	err       error
+}
+
+type pullRequestCommentPostedMsg struct {
+	requestID int
+	key       string
+	comment   githubapi.PullRequestComment
 	err       error
 }
 
@@ -212,12 +227,20 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	}
 	pr := items[m.selectedPR]
 	m.detailKey = fmt.Sprintf("%s#%d", pr.Repository, pr.Number)
+	m.commentRequestID++
 	m.detailOpen = true
 	m.detailLoading = true
 	m.detailError = ""
 	m.prDetails = githubapi.PullRequestDetails{}
 	m.mergeError = ""
 	m.mergeNotice = ""
+	m.commentComposerOpen = false
+	m.commentDraft = ""
+	m.commentCursor = 0
+	m.commentScroll = 0
+	m.commentSending = false
+	m.commentError = ""
+	m.commentNotice = ""
 	m.mergeDialog = noMergeDialog
 	m.mergeInProgress = false
 	m.detailScroll = 0
@@ -372,6 +395,10 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.jumpToReviewFile(0)
 	case "v":
 		m.toggleReviewedFile()
+	case "c":
+		if m.canCommentOnPullRequest() {
+			m.openCommentComposer()
+		}
 	case "up", "k":
 		if m.sidebarFocus {
 			m.sidebarScroll = max(0, m.sidebarScroll-1)
@@ -518,6 +545,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.commentComposerOpen {
+			m.keepCommentCursorVisible()
+		}
 		if m.searching {
 			m.keepSearchCursorVisible()
 		}
@@ -682,13 +712,31 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailLines = nil
 		m.cacheDetailLines()
 		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
+	case pullRequestCommentPostedMsg:
+		if msg.requestID != m.commentRequestID || msg.key != m.detailKey {
+			break
+		}
+		m.commentSending = false
+		if msg.err != nil {
+			m.commentError = safeText(msg.err.Error())
+			break
+		}
+		m.commentComposerOpen = false
+		m.commentDraft = ""
+		m.commentCursor = 0
+		m.commentScroll = 0
+		m.commentError = ""
+		m.commentNotice = "Comment posted on " + safeText(msg.key) + "."
 	case autoRefreshMsg:
 		nextRefresh := scheduleAutoRefresh()
-		if m.loading || m.prLoading || m.mergeInProgress || m.mergeDialog != noMergeDialog {
+		if m.loading || m.prLoading || m.mergeInProgress || m.mergeDialog != noMergeDialog || m.commentSending {
 			return m, nextRefresh
 		}
 		return m, tea.Batch(nextRefresh, m.startDashboardRefresh())
 	case tea.KeyMsg:
+		if m.commentComposerOpen {
+			return m.updateCommentComposerKey(msg)
+		}
 		if m.themePickerOpen {
 			return m.updateThemePickerKey(msg)
 		}

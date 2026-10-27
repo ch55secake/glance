@@ -59,6 +59,12 @@ func (m model) paletteActions() []paletteAction {
 				},
 			})
 		}
+		if m.canCommentOnPullRequest() {
+			actions = append(actions, paletteAction{
+				"Comment on pull request", "Write a Markdown conversation comment", "c",
+				func(m *model) tea.Cmd { m.openCommentComposer(); return nil },
+			})
+		}
 	}
 	actions = append(actions,
 		paletteAction{"My pull requests", "Show open PRs authored by you", "", func(m *model) tea.Cmd { return m.applyPRQuery(defaultPRQuery) }},

@@ -125,6 +125,13 @@ type MergeResult struct {
 	Message string `json:"message"`
 }
 
+// PullRequestComment is a conversation comment posted on a pull request.
+type PullRequestComment struct {
+	ID      int64  `json:"id"`
+	Body    string `json:"body"`
+	HTMLURL string `json:"html_url"`
+}
+
 type repositoryMergeSettings struct {
 	AllowMergeCommit bool `json:"allow_merge_commit"`
 	AllowSquashMerge bool `json:"allow_squash_merge"`
@@ -626,6 +633,30 @@ func (c *Client) MergePullRequest(ctx context.Context, owner, repository string,
 		return result, errors.New(message)
 	}
 	return result, nil
+}
+
+// CreatePullRequestComment posts a conversation comment on a pull request.
+func (c *Client) CreatePullRequestComment(ctx context.Context, owner, repository string, number int, body string) (PullRequestComment, error) {
+	if !validPathSegment(owner) || !validPathSegment(repository) || number < 1 {
+		return PullRequestComment{}, errors.New("GitHub owner, repository, and pull request number must be valid")
+	}
+	if strings.TrimSpace(body) == "" {
+		return PullRequestComment{}, errors.New("a non-empty pull request comment is required")
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", url.PathEscape(owner), url.PathEscape(repository), number)
+	stdout, stderr, err := c.runner.Run(ctx,
+		"api", "-X", "POST", "-f", "body="+body, endpoint,
+	)
+	if err != nil {
+		return PullRequestComment{}, fmt.Errorf("post pull request comment: %w", newCommandError(stderr, err))
+	}
+	comment := PullRequestComment{Body: body}
+	if len(bytes.TrimSpace(stdout)) > 0 {
+		if err := json.Unmarshal(stdout, &comment); err != nil {
+			return PullRequestComment{}, fmt.Errorf("decode gh api pull request comment response: %w", err)
+		}
+	}
+	return comment, nil
 }
 
 func newMergeCommandError(stderr []byte, err error) error {

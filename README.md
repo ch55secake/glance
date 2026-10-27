@@ -96,6 +96,7 @@ code. A sticky file header keeps the current path visible as you scroll.
 | `[` / `]` | Previous / next changed file |
 | `d` | Jump to the first file in the diff |
 | `v` | Toggle the current file as viewed locally |
+| `c` | Write a conversation comment on the pull request |
 
 The file picker shows change counts and viewed markers, including files whose
 patches GitHub cannot provide. Viewed progress belongs to the current review;
@@ -113,6 +114,10 @@ stay pinned. Press `m` or choose **Merge pull request** from `:` to select an
 enabled merge method with up/down or `j`/`k`, press `enter`, then confirm with `y`.
 glance sends the merge through the GitHub API using the loaded head SHA and
 refreshes the dashboard afterwards.
+Press `c` or choose **Comment on pull request** from `:` to write a Markdown
+conversation comment. Press `enter` for a new line and `ctrl+s` to post it; the
+comment is sent through GitHub CLI using your existing authentication. `esc`
+cancels the draft.
 
 Build the executable with:
 
