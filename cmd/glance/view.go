@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -17,24 +18,7 @@ import (
 )
 
 var (
-	brandStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#82E9F0"))
-	accentStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#C9A7FF"))
-	textStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1F2F6"))
-	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#A1AAC4"))
-	goodStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#9AE8B8"))
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBD389"))
-	errorStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF959A"))
-	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("#343C57")).Foreground(lipgloss.Color("#F1F2F6"))
-	activeStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#7252AB"))
-	openBadge     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#B8F3CF")).Background(lipgloss.Color("#214D42"))
-	draftBadge    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFE2A6")).Background(lipgloss.Color("#61492A"))
-	mergedBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#D6C5FF")).Background(lipgloss.Color("#443460"))
-	unreadBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#D6C5FF")).Background(lipgloss.Color("#443460"))
-	addLineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#B8F3CF")).Background(lipgloss.Color("#183A34"))
-	delLineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB6B9")).Background(lipgloss.Color("#452B36"))
-	hunkLineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#C9A7FF")).Background(lipgloss.Color("#302946"))
-	fileLineStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F1F2F6")).Background(lipgloss.Color("#343C57"))
-	hunkHeader    = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+	hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 )
 
 // View renders a fixed-height dashboard; the PR window moves with the selection.
@@ -42,7 +26,7 @@ func (m model) View() string {
 	if m.width < 30 || m.height < 10 {
 		return m.smallTerminalView()
 	}
-	if m.paletteOpen || m.filePickerOpen {
+	if m.paletteOpen || m.filePickerOpen || m.themePickerOpen {
 		return m.modalView()
 	}
 	width := max(1, m.width)
@@ -142,6 +126,9 @@ func (m model) header(width int) string {
 		if m.loading {
 			status = "↻ " + status
 		}
+	}
+	if m.themeConfigError != "" {
+		status, style = "CONFIG ERROR", warnStyle
 	}
 	if width < 35 {
 		return "  " + left
@@ -557,10 +544,18 @@ func (m model) checkStatusLines(width int) []string {
 	if len(m.prDetails.CheckRuns) == 0 {
 		return []string{"  " + mutedStyle.Render("No checks reported")}
 	}
-	lines := make([]string, 0, len(m.prDetails.CheckRuns))
-	for _, check := range m.prDetails.CheckRuns {
+	checks := append([]githubapi.CheckRun(nil), m.prDetails.CheckRuns...)
+	sort.SliceStable(checks, func(i, j int) bool {
+		return checkPriority(checks[i]) < checkPriority(checks[j])
+	})
+	lines := []string{"  " + checkStatusSummary(m.prDetails.CheckRuns, width)}
+	for _, check := range checks {
 		label, style := checkStyle(check)
-		parts := wrapDiffLine(safeText(check.Name), max(1, width-lipgloss.Width(label)-2))
+		name := safeText(check.Name)
+		if width >= 55 && check.CompletedAt != nil && !check.CompletedAt.IsZero() {
+			name += "  ·  " + relativeTime(*check.CompletedAt)
+		}
+		parts := wrapDiffWords(name, max(1, width-lipgloss.Width(label)-2))
 		for i, part := range parts {
 			if i == 0 {
 				lines = append(lines, "  "+style.Render(label+"  "+part))
@@ -570,6 +565,59 @@ func (m model) checkStatusLines(width int) []string {
 		}
 	}
 	return lines
+}
+
+func checkPriority(check githubapi.CheckRun) int {
+	switch label, _ := checkStyle(check); label {
+	case "✕ FAIL":
+		return 0
+	case "! CANCEL":
+		return 1
+	case "◌ RUNNING":
+		return 2
+	case "? UNKNOWN":
+		return 3
+	case "– SKIP":
+		return 4
+	default:
+		return 5
+	}
+}
+
+func checkStatusSummary(checks []githubapi.CheckRun, width int) string {
+	counts := countCheckStatuses(checks)
+	styles := make(map[string]lipgloss.Style)
+	for _, check := range checks {
+		label, style := checkStyle(check)
+		styles[label] = style
+	}
+	labels := []string{"✕ FAIL", "! CANCEL", "◌ RUNNING", "? UNKNOWN", "– SKIP", "✓ PASS"}
+	words := map[string]string{
+		"✕ FAIL": "failed", "! CANCEL": "cancelled", "◌ RUNNING": "running",
+		"? UNKNOWN": "unknown", "– SKIP": "skipped", "✓ PASS": "passed",
+	}
+	var detailed, compact []string
+	for _, label := range labels {
+		if counts[label] == 0 {
+			continue
+		}
+		symbol := strings.Fields(label)[0]
+		compact = append(compact, styles[label].Render(fmt.Sprintf("%s%d", symbol, counts[label])))
+		detailed = append(detailed, styles[label].Render(fmt.Sprintf("%s %d %s", symbol, counts[label], words[label])))
+	}
+	if width >= 58 && lipgloss.Width(strings.Join(detailed, "  ")) <= width {
+		return strings.Join(detailed, "  ")
+	}
+	return strings.Join(compact, "  ")
+}
+
+func countCheckStatuses(checks []githubapi.CheckRun) map[string]int {
+	counts := make(map[string]int)
+	for _, check := range checks {
+		label, _ := checkStyle(check)
+		counts[label]++
+	}
+	return counts
 }
 
 func (m model) maxSidebarScroll() int {
@@ -620,15 +668,18 @@ func (m model) reviewSidebar(width, height int) []string {
 	return lines
 }
 
-// mergeActionPanel stays below the scrollable PR content so the next action and
-// any result remain visible even at the bottom of a long diff.
+// Keep merge prompts and results pinned, but leave the ordinary diff view free
+// of a permanent shortcut footer.
 func (m model) mergeActionPanel(width int) []string {
-	lines := []string{"  " + mutedStyle.Render(strings.Repeat("─", width))}
+	lines := make([]string, 0, 8)
 	if m.mergeError != "" {
 		lines = append(lines, panelMessage("Merge: "+m.mergeError, width, errorStyle)...)
 	}
 	if m.mergeNotice != "" {
 		lines = append(lines, panelMessage(m.mergeNotice, width, goodStyle)...)
+	}
+	if m.mergeInProgress || m.mergeDialog != noMergeDialog || len(lines) > 0 {
+		lines = append([]string{"  " + mutedStyle.Render(strings.Repeat("─", width))}, lines...)
 	}
 	switch {
 	case m.mergeInProgress:
@@ -652,24 +703,7 @@ func (m model) mergeActionPanel(width int) []string {
 		)
 		return lines
 	default:
-		actions := "◆ ACTIONS  ·  m merge  ·  r refresh  ·  esc back"
-		guidance := "f files  ·  [/] jump  ·  v viewed  ·  ↑/↓ scroll  ·  ? help"
-		if width < 45 {
-			actions = "◆ ACTIONS  ·  m merge"
-			guidance = "esc back  ·  f files"
-		} else if width < 70 {
-			actions = "◆ ACTIONS  ·  m merge  ·  esc back"
-			guidance = "f files  ·  [/] jump  ·  v viewed"
-		} else if m.hasReviewSidebar() {
-			guidance = "f files  ·  [/] jump  ·  v viewed  ·  tab switch pane  ·  PgUp/PgDn page  ·  ? help"
-		}
-		if width >= 70 {
-			actions += "  ·  : commands"
-		}
-		return append(lines,
-			"  "+accentStyle.Render(clipLine(actions, width)),
-			"  "+mutedStyle.Render(clipLine(guidance, width)),
-		)
+		return lines
 	}
 }
 
@@ -790,7 +824,7 @@ func renderDiffPatch(patch string, width int, lexer chroma.Lexer) []string {
 		}
 		gutter := fmt.Sprintf("%4s %4s │ ", oldNumber, newNumber)
 		available := max(1, width-lipgloss.Width(gutter))
-		for i, part := range wrapDiffLine(line, available) {
+		for i, part := range wrapDiffWords(line, available) {
 			prefix := gutter
 			if i > 0 {
 				prefix = strings.Repeat(" ", lipgloss.Width(gutter)-2) + "↳ "
@@ -819,13 +853,13 @@ func highlightCode(code string, lexer chroma.Lexer, background lipgloss.Style) s
 		style := background
 		switch {
 		case token.Type.InCategory(chroma.Keyword):
-			style = style.Foreground(lipgloss.Color("#D6C5FF")).Bold(true)
+			style = style.Foreground(lipgloss.Color(syntaxKeyword)).Bold(true)
 		case token.Type.InCategory(chroma.LiteralString):
-			style = style.Foreground(lipgloss.Color("#FBD389"))
+			style = style.Foreground(lipgloss.Color(syntaxString))
 		case token.Type.InCategory(chroma.LiteralNumber):
-			style = style.Foreground(lipgloss.Color("#82E9F0"))
+			style = style.Foreground(lipgloss.Color(syntaxNumber))
 		case token.Type.InCategory(chroma.Comment):
-			style = style.Foreground(lipgloss.Color("#A1AAC4"))
+			style = style.Foreground(lipgloss.Color(syntaxComment))
 		}
 		result.WriteString(style.Render(token.Value))
 	}
@@ -848,6 +882,50 @@ func wrapDiffLine(line string, width int) []string {
 		used += charWidth
 	}
 	return append(parts, current.String())
+}
+
+// wrapDiffWords keeps prose and identifiers intact when there is a nearby
+// whitespace boundary; long unbroken tokens still hard-wrap to fit the pane.
+func wrapDiffWords(line string, width int) []string {
+	width = max(1, width)
+	runes := []rune(line)
+	var parts []string
+	for start := 0; start < len(runes); {
+		used, end, lastBreak := 0, start, -1
+		hasText := false
+		for end < len(runes) {
+			charWidth := lipgloss.Width(string(runes[end]))
+			if end > start && used+charWidth > width {
+				break
+			}
+			used += charWidth
+			end++
+			if unicode.IsSpace(runes[end-1]) {
+				if hasText {
+					lastBreak = end
+				}
+			} else {
+				hasText = true
+			}
+		}
+		if end == len(runes) {
+			parts = append(parts, string(runes[start:end]))
+			break
+		}
+		split := end
+		if lastBreak > start {
+			split = lastBreak
+		}
+		if split == start {
+			split = end
+		}
+		parts = append(parts, string(runes[start:split]))
+		start = split
+	}
+	if len(parts) == 0 {
+		return []string{""}
+	}
+	return parts
 }
 
 func mergeMethodLabel(method githubapi.MergeMethod) string {
@@ -897,7 +975,7 @@ func (m model) githubFilterBox(width int) []string {
 		}
 		value = "…" + value
 	}
-	border := lipgloss.NewStyle().Foreground(lipgloss.Color("#606889"))
+	border := lipgloss.NewStyle().Foreground(lipgloss.Color(themeBorderColor))
 	if m.searching {
 		border = accentStyle
 	} else if m.apiError != "" {
@@ -953,7 +1031,7 @@ func (m model) prRow(pr githubapi.PullRequest, width int, selected bool) []strin
 		return []string{
 			"  " + selectedStyle.Bold(true).Width(width).Render(first),
 			"  " + selectedStyle.Width(width).Render(second),
-			"  " + selectedStyle.Foreground(lipgloss.Color("#D0D7E7")).Width(width).Render(third),
+			"  " + selectedStyle.Foreground(lipgloss.Color(themeTextColor)).Width(width).Render(third),
 		}
 	}
 	return []string{"  " + textStyle.Bold(true).Render(first), "  " + second, "  " + mutedStyle.Render(third)}
@@ -982,6 +1060,8 @@ func (m model) footer(width int) string {
 	switch {
 	case m.filePickerOpen:
 		hints = []shortcut{{"enter", "jump"}, {"esc", "close"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
+	case m.themePickerOpen:
+		hints = []shortcut{{"enter", "apply"}, {"esc", "close"}, {"↑/↓", "preview"}}
 	case m.paletteOpen:
 		hints = []shortcut{{"enter", "run"}, {"esc", "close"}, {"↑/↓", "choose"}, {"ctrl+u", "clear"}}
 	case m.searching:
@@ -995,7 +1075,7 @@ func (m model) footer(width int) string {
 	default:
 		hints = []shortcut{{"↑/↓", "select"}, {"?", "help"}, {":", "commands"}}
 	}
-	if !m.paletteOpen && !m.filePickerOpen && !m.searching && !m.showHelp {
+	if !m.paletteOpen && !m.filePickerOpen && !m.themePickerOpen && !m.searching && !m.showHelp {
 		if m.hasInboxPreview() && !m.inboxPreviewFocus {
 			hints = append(hints, shortcut{"tab", "preview"})
 		}

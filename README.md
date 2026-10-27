@@ -44,27 +44,34 @@ Narrow terminals use a single column. Shortcut hints stay pinned at the bottom.
 | `esc` | Return focus from the preview to the list |
 | `enter` | Open the selected PR's review and diff |
 | `:` | Search the command palette |
+| `t` | Open the theme switcher |
 | `?` | Open scrollable keyboard help, including during PR review |
-| `r` / `q` | Refresh / quit |
+| `r` / `q` | Refresh now / quit |
 
 The palette matches words in command names and descriptions. Use up/down,
 `tab`/`shift+tab`, or `ctrl+n`/`ctrl+p` to select a command, `enter` to run it,
 and `esc` to return to the same position. Command and file pickers overlay the
 dimmed workspace, keeping your context visible. The palette also shows each
-command's shortcut.
+command's shortcut. Choose **Switch theme** to preview Midnight, Nord, Dracula,
+or Solarized; the selection takes effect immediately and is remembered for the
+next launch in `$XDG_CONFIG_HOME/glance/config.json` (default:
+`~/.config/glance/config.json`).
 
 The selected PR's description, mergeability, checks, and review activity load
 after a short pause and are cached while browsing. Focus its preview to scroll
 through the full content. PR and issue descriptions render Markdown, including
 lists and code, while preserving authored line breaks. Issues include labels
 and comment counts; notifications explain why each thread is in your inbox.
+All inboxes refresh automatically every five minutes, preserving the applied PR
+filter and current selection when it still exists. Press `r` to refresh sooner.
 
 ### GitHub filters
 
 The PR inbox defaults to `is:pr is:open author:@me`. Press `/` to edit it using
 GitHub search qualifiers (for example, `repo:owner/name is:open`), `enter` to
 apply, or `esc` to cancel. Editing only fetches results when you submit.
-The command palette includes **My pull requests**, **Needs my review**, and
+The command palette includes **My pull requests**, **Needs my review**, **Open
+PRs in my repositories** (repositories owned by your authenticated account), and
 **All open pull requests** for switching directly between common GitHub queries.
 
 Use left/right to move the cursor, Home/End or `ctrl+a`/`ctrl+e` to jump to an
@@ -97,12 +104,15 @@ These markers are local navigation aids and are not submitted to GitHub.
 
 On wide terminals, mergeability, checks, and review activity are in a
 right-hand panel; press `tab` to focus it and use `j`/`k` or `PgUp`/`PgDn` to
-scroll it independently. The active pane is highlighted without a focus label.
-On narrow terminals, checks and reviews appear below the diff. Merge and
-navigation controls stay together in the pinned action area. Press `m` to select
-an enabled merge method with up/down or `j`/`k`, press `enter`, then confirm
-with `y`. glance sends the merge through the GitHub API using the loaded head
-SHA and refreshes the dashboard afterwards.
+scroll it independently. Check counts summarize results, failures and running
+checks appear first, and recent completion times show when space allows. The
+active pane is highlighted without a focus label.
+On narrow terminals, checks and reviews appear below the diff. The ordinary
+diff view has no permanent shortcut footer; press `?` for controls. Merge prompts
+stay pinned. Press `m` or choose **Merge pull request** from `:` to select an
+enabled merge method with up/down or `j`/`k`, press `enter`, then confirm with `y`.
+glance sends the merge through the GitHub API using the loaded head SHA and
+refreshes the dashboard afterwards.
 
 Build the executable with:
 

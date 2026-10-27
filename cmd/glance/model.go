@@ -23,6 +23,10 @@ type model struct {
 	width                int
 	height               int
 	activeSection        int
+	theme                string
+	themePickerOpen      bool
+	themePickerSelection int
+	themeConfigError     string
 	loading              bool
 	viewer               githubapi.User
 	apiError             string
@@ -140,11 +144,12 @@ const (
 )
 
 func initialModel() model {
-	return model{width: 80, height: 24, loading: true, query: defaultPRQuery, client: githubapi.NewClient()}
+	applyTheme(defaultThemeID)
+	return model{width: 80, height: 24, loading: true, query: defaultPRQuery, theme: defaultThemeID, client: githubapi.NewClient()}
 }
 
 func (m model) Init() tea.Cmd {
-	return m.loadDashboard()
+	return tea.Batch(m.loadDashboard(), scheduleAutoRefresh())
 }
 
 func (m model) loadDashboard() tea.Cmd {
@@ -176,6 +181,18 @@ func (m model) loadDashboard() tea.Cmd {
 		requests.Wait()
 		return result
 	}
+}
+
+func (m *model) startDashboardRefresh() tea.Cmd {
+	m.clearPRPreviews()
+	m.loading = true
+	m.prLoading = true
+	m.apiError = ""
+	m.issueError = ""
+	m.notificationError = ""
+	m.requestID++
+	m.prRequestID++
+	return m.loadDashboard()
 }
 
 func (m model) searchPullRequests() tea.Cmd {
@@ -343,6 +360,8 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.switchSection(section - 1)
 	case "/":
 		m.beginSearch()
+	case "t":
+		m.openThemePicker()
 	case "f":
 		m.openFilePicker()
 	case "]":
@@ -663,7 +682,16 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailLines = nil
 		m.cacheDetailLines()
 		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
+	case autoRefreshMsg:
+		nextRefresh := scheduleAutoRefresh()
+		if m.loading || m.prLoading || m.mergeInProgress || m.mergeDialog != noMergeDialog {
+			return m, nextRefresh
+		}
+		return m, tea.Batch(nextRefresh, m.startDashboardRefresh())
 	case tea.KeyMsg:
+		if m.themePickerOpen {
+			return m.updateThemePickerKey(msg)
+		}
 		if m.filePickerOpen {
 			return m.updateFilePickerKey(msg)
 		}
@@ -795,6 +823,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.showHelp = true
 			m.helpScroll = 0
+		case "t":
+			m.openThemePicker()
 		case "/":
 			if m.activeSection == 0 {
 				m.beginSearch()
@@ -803,15 +833,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.loading {
 				break
 			}
-			m.clearPRPreviews()
-			m.loading = true
-			m.prLoading = true
-			m.apiError = ""
-			m.issueError = ""
-			m.notificationError = ""
-			m.requestID++
-			m.prRequestID++
-			return m, m.loadDashboard()
+			return m, m.startDashboardRefresh()
 		}
 	}
 

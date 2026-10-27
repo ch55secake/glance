@@ -125,11 +125,8 @@ func TestInitLoadsViewerThroughGhAPI(t *testing.T) {
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
 
-	result := m.Init()()
-	msg, ok := result.(dashboardLoadedMsg)
-	if !ok {
-		t.Fatalf("Init() message = %T, want dashboardLoadedMsg", result)
-	}
+	result := runInitialDashboard(t, m)
+	msg := result
 	if msg.err != nil {
 		t.Fatalf("Init() error = %v", msg.err)
 	}
@@ -173,10 +170,7 @@ func TestInitLoadsIssuesAndNotifications(t *testing.T) {
 	}}
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
-	msg, ok := m.Init()().(dashboardLoadedMsg)
-	if !ok {
-		t.Fatal("Init() did not return dashboardLoadedMsg")
-	}
+	msg := runInitialDashboard(t, m)
 	if msg.err != nil || msg.pullRequestErr != nil || msg.issueErr != nil || msg.notificationErr != nil {
 		t.Fatalf("dashboard loading errors = viewer:%v PR:%v issue:%v notifications:%v", msg.err, msg.pullRequestErr, msg.issueErr, msg.notificationErr)
 	}
@@ -196,12 +190,27 @@ func TestGhAuthenticationErrorIsShownInPRInbox(t *testing.T) {
 	}
 	m := initialModel()
 	m.client = githubapi.NewClientWithRunner(runner)
-	msg := m.Init()().(dashboardLoadedMsg)
+	msg := runInitialDashboard(t, m)
 	updated, _ := m.Update(msg)
 
 	if view := updated.(model).View(); !strings.Contains(view, "gh auth login") {
 		t.Errorf("view %q does not show gh auth login guidance", view)
 	}
+}
+
+func runInitialDashboard(t *testing.T, m model) dashboardLoadedMsg {
+	t.Helper()
+	result := m.Init()()
+	batch, ok := result.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("Init() message = %T, want dashboard load and auto-refresh timer", result)
+	}
+	loaded := batch[0]()
+	message, ok := loaded.(dashboardLoadedMsg)
+	if !ok {
+		t.Fatalf("initial dashboard command returned %T, want dashboardLoadedMsg", loaded)
+	}
+	return message
 }
 
 func TestPullRequestListRendersRepositoryAndStatus(t *testing.T) {
@@ -256,13 +265,13 @@ func TestPullRequestRowsKeepSelectionAndNumbersOnNarrowScreens(t *testing.T) {
 		}
 	}
 	m.selectedPR = 1
-	if view := m.View(); !strings.Contains(view, "SELECTED  2 / 2") {
+	if view := m.View(); !strings.Contains(view, "2 of 2") {
 		t.Errorf("list footer does not show selection: %s", view)
 	}
 	m.query = "is:pr is:open draft:true"
 	m.pullRequests = m.pullRequests[1:]
 	m.selectedPR = 0
-	if view := m.View(); !strings.Contains(view, "1 found") || !strings.Contains(view, "SELECTED  1 / 1") {
+	if view := m.View(); !strings.Contains(view, "1 found") || !strings.Contains(view, "1 of 1") {
 		t.Errorf("filtered list does not show its size and selection: %s", view)
 	}
 }
@@ -280,7 +289,7 @@ func TestPullRequestListSelectionVisibleWithoutColor(t *testing.T) {
 	}
 	m.selectedPR = 1
 	view := m.View()
-	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "SELECTED  2 / 2") {
+	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "▸ Second PR") || !strings.Contains(view, "2 of 2") {
 		t.Errorf("monochrome list lost the selection marker or position: %s", view)
 	}
 }
@@ -500,7 +509,7 @@ func TestDiffWrapsLongFilePaths(t *testing.T) {
 	}
 }
 
-func TestMergeActionsStayVisibleWhileScrollingDiff(t *testing.T) {
+func TestMergeActionsRemainAvailableWithoutRoutineDiffFooter(t *testing.T) {
 	m := initialModel()
 	m.width, m.height = 45, 18
 	m.loading = false
@@ -516,8 +525,8 @@ func TestMergeActionsStayVisibleWhileScrollingDiff(t *testing.T) {
 	m.diffFiles = []githubapi.PullRequestFile{{Filename: "src/file.go", Patch: "@@ -1 +1 @@\n" + strings.Repeat("+changed line\n", 35)}}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = updated.(model)
-	if m.detailScroll == 0 || !strings.Contains(m.View(), "ACTIONS") || !strings.Contains(m.View(), "+changed line") {
-		t.Fatalf("scrolling lost actions or diff: %s", m.View())
+	if m.detailScroll == 0 || strings.Contains(m.View(), "ACTIONS") || strings.Contains(m.View(), "m merge") || !strings.Contains(m.View(), "+changed line") {
+		t.Fatalf("diff still shows routine action hints or lost content: %s", m.View())
 	}
 	end := m.detailScroll
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
@@ -1164,7 +1173,7 @@ func TestInboxLayoutFramesPanesAndKeepsTitleFirst(t *testing.T) {
 				}
 			}
 			view := strings.Join(lines, "\n")
-			if width >= 80 && (!strings.Contains(view, "╭─ ▎ INBOX") || !strings.Contains(view, "╭─ SELECTED")) {
+			if width >= 80 && (!strings.Contains(view, "╭─ ▎ INBOX") || strings.Count(view, "╭") < 2 || strings.Contains(view, "PREVIEW")) {
 				t.Errorf("section %d at width %d lost framed list and preview: %s", tc.section, width, view)
 			}
 			if title, context := strings.Index(view, tc.title), strings.Index(view, tc.context); title < 0 || context < title {

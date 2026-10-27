@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func TestWideInboxWorkspaceTracksSelection(t *testing.T) {
@@ -26,7 +27,8 @@ func TestWideInboxWorkspaceTracksSelection(t *testing.T) {
 			}
 			m.setSelection(17)
 			view := m.View()
-			if !strings.Contains(view, "SELECTED  18 / 18") ||
+			if strings.Contains(view, "SELECTED") || strings.Contains(view, "PREVIEW") ||
+				!strings.Contains(view, "18 of 18") || strings.Count(view, "╭") < 2 ||
 				!strings.Contains(view, "▸ "+[]string{"Review PR 18", "Resolve issue 18", "Thread 18"}[section]) ||
 				(section != 2 && !strings.Contains(view, "team/repo#18")) {
 				t.Errorf("%dx%d section %d lost selected item: %s", size.width, size.height, section, view)
@@ -42,7 +44,7 @@ func TestWideInboxWorkspaceTracksSelection(t *testing.T) {
 			}
 			m.setSelection(0)
 			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-			if !strings.Contains(updated.(model).View(), "SELECTED  2 / 18") || (cmd != nil) != (section == 0 && size.height >= 20) {
+			if !strings.Contains(updated.(model).View(), "2 of 18") || (cmd != nil) != (section == 0 && size.height >= 20) {
 				t.Errorf("section %d selection should update immediately; only PRs schedule delayed context", section)
 			}
 		}
@@ -54,11 +56,11 @@ func TestInboxWorkspaceFallsBackOnNarrowTerminals(t *testing.T) {
 	m.width, m.height = 79, 16
 	m.loading = false
 	m.pullRequests = []githubapi.PullRequest{{Number: 42, Title: "A pull request", Repository: "team/repo"}}
-	if view := m.View(); strings.Contains(view, "SELECTED") || !strings.Contains(view, "#42") {
+	if view := m.View(); strings.Contains(view, "PREVIEW") || !strings.Contains(view, "#42") {
 		t.Fatalf("narrow list lost its single-column layout: %s", view)
 	}
 	m.width = 80
-	if view := m.View(); !strings.Contains(view, "SELECTED  1 / 1") || !strings.Contains(view, "team/repo#42") {
+	if view := m.View(); strings.Contains(view, "PREVIEW") || strings.Contains(view, "SELECTED") || !strings.Contains(view, "team/repo#42") {
 		t.Fatalf("wide list did not switch to the workspace: %s", view)
 	}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -95,7 +97,7 @@ func TestPRPreviewLoadsAfterSelectionAndCachesContext(t *testing.T) {
 	}
 	updated, delayed := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
-	if delayed == nil || !strings.Contains(m.View(), "SELECTED  2 / 2") {
+	if delayed == nil || !strings.Contains(m.View(), "2 of 2") {
 		t.Fatal("selection did not update immediately and schedule delayed details")
 	}
 	updated, _ = m.Update(previewReadyMsg{key: "team/repo#1", epoch: m.previewEpoch})
@@ -214,6 +216,32 @@ func TestPreviewMarkdownPreservesLineBreaksAndWraps(t *testing.T) {
 		if lipgloss.Width(line) > 40 || strings.Contains(line, "\x1b[31m") {
 			t.Errorf("preview text escaped its pane: %q", line)
 		}
+	}
+}
+
+func TestPreviewMarkdownUsesPaneWidthWithoutExtraLeftIndent(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	lines := previewMarkdown(strings.Repeat("Readable prose fills the available pane width. ", 4), 40)
+	if len(lines) < 2 {
+		t.Fatalf("long prose was not wrapped: %#v", lines)
+	}
+	first := ansi.Strip(lines[0])
+	if strings.HasPrefix(first, " ") || !strings.HasPrefix(first, "Readable prose") {
+		t.Fatalf("preview prose has unnecessary left padding: %q", first)
+	}
+	widest := 0
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > widest {
+			widest = width
+		}
+		if lipgloss.Width(line) > 40 {
+			t.Errorf("prose exceeds pane width: %q", line)
+		}
+	}
+	if widest < 34 {
+		t.Errorf("wrapped prose leaves too much unused width (%d columns): %#v", widest, lines)
 	}
 }
 

@@ -28,6 +28,10 @@ func (m model) paletteActions() []paletteAction {
 			m.beginSearch()
 			return nil
 		}},
+		{"Switch theme", "Choose and save a color theme", "t", func(m *model) tea.Cmd {
+			m.openThemePicker()
+			return nil
+		}},
 	}
 	if !m.detailOpen && m.activeSection == 0 && len(m.pullRequests) > 0 {
 		actions = append(actions, paletteAction{"Review selected PR", "Open details and the continuous diff", "enter", func(m *model) tea.Cmd { return m.openSelectedPullRequest() }})
@@ -45,12 +49,29 @@ func (m model) paletteActions() []paletteAction {
 			paletteAction{"Jump to diff", "Start reading the first changed file", "d", func(m *model) tea.Cmd { m.jumpToReviewFile(0); return nil }},
 			paletteAction{"Back to inbox", "Return to your selection", "esc", func(m *model) tea.Cmd { m.detailOpen = false; return m.schedulePRPreview() }},
 		)
+		if m.mergeDialog == noMergeDialog && !m.mergeInProgress {
+			actions = append(actions, paletteAction{
+				"Merge pull request", "Choose a merge method and confirm", "m",
+				func(m *model) tea.Cmd {
+					updated, cmd := m.Update(keyForPalette("m"))
+					*m = updated.(model)
+					return cmd
+				},
+			})
+		}
 	}
 	actions = append(actions,
 		paletteAction{"My pull requests", "Show open PRs authored by you", "", func(m *model) tea.Cmd { return m.applyPRQuery(defaultPRQuery) }},
 		paletteAction{"Needs my review", "Show PRs requesting your review", "", func(m *model) tea.Cmd { return m.applyPRQuery(reviewRequestedQuery) }},
 		paletteAction{"All open pull requests", "Show open PRs across repositories", "", func(m *model) tea.Cmd { return m.applyPRQuery(allOpenQuery) }},
 	)
+	if query, ok := ownedRepositoriesPRQuery(m.viewer.Login); ok {
+		login := m.viewer.Login
+		actions = append(actions, paletteAction{
+			"Open PRs in my repositories", "Show open PRs in repositories owned by @" + login, "",
+			func(m *model) tea.Cmd { return m.applyPRQuery(query) },
+		})
+	}
 	return append(actions,
 		paletteAction{"Help", "Show keyboard shortcuts", "?", func(m *model) tea.Cmd { m.showHelp = true; m.helpScroll = 0; return nil }},
 		paletteAction{"Quit", "Exit glance", "q", func(*model) tea.Cmd { return tea.Quit }},
@@ -166,7 +187,7 @@ func (m model) paletteView(width int) []string {
 		}
 		content = append(content, "", mutedStyle.Render(clipLine(hint, inner)))
 	}
-	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#C9A7FF")).Padding(0, 1).Width(inner + 2).Render(strings.Join(content, "\n"))
+	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(themeAccentColor)).Padding(0, 1).Width(inner + 2).Render(strings.Join(content, "\n"))
 	margin := strings.Repeat(" ", 2+max(0, (width-cardWidth)/2))
 	lines := strings.Split(card, "\n")
 	for i := range lines {
