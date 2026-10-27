@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"unicode"
 
 	"glance/internal/githubapi"
 
@@ -10,6 +11,19 @@ import (
 
 const reviewRequestedQuery = "is:pr is:open review-requested:@me"
 const allOpenQuery = "is:pr is:open"
+
+func ownedRepositoriesPRQuery(login string) (string, bool) {
+	if len(login) == 0 || len(login) > 39 {
+		return "", false
+	}
+	for i, char := range login {
+		valid := unicode.IsLetter(char) && char <= unicode.MaxASCII || unicode.IsDigit(char) && char <= unicode.MaxASCII || char == '-'
+		if !valid || (char == '-' && (i == 0 || i == len(login)-1)) {
+			return "", false
+		}
+	}
+	return "is:pr is:open user:" + login, true
+}
 
 func checkSummary(details githubapi.PullRequestDetails) string {
 	if details.ChecksError != "" {

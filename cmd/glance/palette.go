@@ -55,6 +55,13 @@ func (m model) paletteActions() []paletteAction {
 		paletteAction{"Needs my review", "Show PRs requesting your review", "", func(m *model) tea.Cmd { return m.applyPRQuery(reviewRequestedQuery) }},
 		paletteAction{"All open pull requests", "Show open PRs across repositories", "", func(m *model) tea.Cmd { return m.applyPRQuery(allOpenQuery) }},
 	)
+	if query, ok := ownedRepositoriesPRQuery(m.viewer.Login); ok {
+		login := m.viewer.Login
+		actions = append(actions, paletteAction{
+			"Open PRs in my repositories", "Show open PRs in repositories owned by @" + login, "",
+			func(m *model) tea.Cmd { return m.applyPRQuery(query) },
+		})
+	}
 	return append(actions,
 		paletteAction{"Help", "Show keyboard shortcuts", "?", func(m *model) tea.Cmd { m.showHelp = true; m.helpScroll = 0; return nil }},
 		paletteAction{"Quit", "Exit glance", "q", func(*model) tea.Cmd { return tea.Quit }},
