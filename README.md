@@ -70,7 +70,8 @@ filter and current selection when it still exists. Press `r` to refresh sooner.
 The PR inbox defaults to `is:pr is:open author:@me`. Press `/` to edit it using
 GitHub search qualifiers (for example, `repo:owner/name is:open`), `enter` to
 apply, or `esc` to cancel. Editing only fetches results when you submit.
-The command palette includes **My pull requests**, **Needs my review**, and
+The command palette includes **My pull requests**, **Needs my review**, **Open
+PRs in my repositories** (repositories owned by your authenticated account), and
 **All open pull requests** for switching directly between common GitHub queries.
 
 Use left/right to move the cursor, Home/End or `ctrl+a`/`ctrl+e` to jump to an
