@@ -49,6 +49,16 @@ func (m model) paletteActions() []paletteAction {
 			paletteAction{"Jump to diff", "Start reading the first changed file", "d", func(m *model) tea.Cmd { m.jumpToReviewFile(0); return nil }},
 			paletteAction{"Back to inbox", "Return to your selection", "esc", func(m *model) tea.Cmd { m.detailOpen = false; return m.schedulePRPreview() }},
 		)
+		if m.mergeDialog == noMergeDialog && !m.mergeInProgress {
+			actions = append(actions, paletteAction{
+				"Merge pull request", "Choose a merge method and confirm", "m",
+				func(m *model) tea.Cmd {
+					updated, cmd := m.Update(keyForPalette("m"))
+					*m = updated.(model)
+					return cmd
+				},
+			})
+		}
 	}
 	actions = append(actions,
 		paletteAction{"My pull requests", "Show open PRs authored by you", "", func(m *model) tea.Cmd { return m.applyPRQuery(defaultPRQuery) }},
