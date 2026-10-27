@@ -655,6 +655,149 @@ func TestMergeFlowRequiresMethodChoiceAndConfirmation(t *testing.T) {
 	}
 }
 
+func TestBehindPullRequestBranchCanBeUpdatedAndStatusIsChecked(t *testing.T) {
+	runner := &modelTestRunner{responses: map[string][]byte{
+		"repos/octo/project/pulls/42/update-branch": []byte(`{"message":"Updating pull request branch."}`),
+	}}
+	m := initialModel()
+	m.width, m.height = 120, 24
+	m.client = githubapi.NewClientWithRunner(runner)
+	m.detailOpen = true
+	m.detailKey = "octo/project#42"
+	m.detailRequestID = 4
+	m.diffLoaded = true
+	m.prDetails = githubapi.PullRequestDetails{
+		PullRequest:    githubapi.PullRequest{Number: 42, Repository: "octo/project", State: "open"},
+		Head:           githubapi.PullRequestBranch{SHA: "head123"},
+		MergeableState: "behind",
+	}
+	if !m.canUpdateBranch() || !strings.Contains(m.View(), "press u to update") {
+		t.Fatalf("behind branch is not actionable: %s", m.View())
+	}
+	updated, cmd := m.Update(key("u"))
+	m = updated.(model)
+	if cmd == nil || !m.branchUpdateInProgress {
+		t.Fatalf("u did not start the branch update: %+v", m)
+	}
+	result, ok := cmd().(pullRequestBranchUpdatedMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("update command returned %+v", result)
+	}
+	updated, cmd = m.Update(result)
+	m = updated.(model)
+	if cmd == nil || !m.branchUpdateChecking || !strings.Contains(m.View(), "CHECKING BRANCH STATUS") {
+		t.Fatalf("accepted update did not start status verification: %+v", m)
+	}
+	updated, cmd = m.Update(branchUpdateCheckMsg{requestID: m.branchUpdateRequestID, key: m.detailKey})
+	m = updated.(model)
+	if cmd == nil || !m.detailLoading || !m.diffLoading {
+		t.Fatalf("status check did not refresh PR details and diff: %+v", m)
+	}
+	updated, cmd = m.Update(pullRequestDetailsLoadedMsg{
+		requestID: m.detailRequestID,
+		key:       m.detailKey,
+		details: githubapi.PullRequestDetails{
+			PullRequest:    githubapi.PullRequest{Number: 42, Repository: "octo/project", State: "open"},
+			MergeableState: "clean",
+		},
+	})
+	m = updated.(model)
+	if cmd != nil || m.branchUpdateChecking || !strings.Contains(m.branchUpdateNotice, "up to date") {
+		t.Fatalf("updated branch status was not reported: state=%+v, command=%v", m, cmd != nil)
+	}
+	if len(runner.calls) != 1 || !slices.Contains(runner.calls[0], "expected_head_sha=head123") {
+		t.Fatalf("update did not use the loaded head SHA: %#v", runner.calls)
+	}
+}
+
+func TestBranchUpdateOnlyAppearsForAnOpenBehindBranchWithHeadSHA(t *testing.T) {
+	m := initialModel()
+	m.detailOpen = true
+	m.prDetails = githubapi.PullRequestDetails{
+		PullRequest:    githubapi.PullRequest{State: "open"},
+		Head:           githubapi.PullRequestBranch{SHA: "head123"},
+		MergeableState: "behind",
+	}
+	if !m.canUpdateBranch() {
+		t.Fatal("open behind branch with a head SHA cannot be updated")
+	}
+	for name, mutate := range map[string]func(*model){
+		"closed":             func(m *model) { m.prDetails.State = "closed" },
+		"merged":             func(m *model) { m.prDetails.Merged = true },
+		"not behind":         func(m *model) { m.prDetails.MergeableState = "clean" },
+		"missing head SHA":   func(m *model) { m.prDetails.Head.SHA = "" },
+		"detail error":       func(m *model) { m.detailError = "stale response" },
+		"details loading":    func(m *model) { m.detailLoading = true },
+		"diff loading":       func(m *model) { m.diffLoading = true },
+		"update in progress": func(m *model) { m.branchUpdateInProgress = true },
+		"status checking":    func(m *model) { m.branchUpdateChecking = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := m
+			mutate(&candidate)
+			if candidate.canUpdateBranch() {
+				t.Fatal("branch update offered in an ineligible state")
+			}
+		})
+	}
+}
+
+func TestBranchUpdateWaitsForGitHubStatusAndStopsAfterSeveralChecks(t *testing.T) {
+	m := initialModel()
+	m.detailOpen = true
+	m.detailKey = "octo/project#42"
+	m.detailRequestID = 6
+	m.branchUpdateRequestID = 3
+	m.branchUpdateChecking = true
+	for attempt := 1; attempt <= 5; attempt++ {
+		m.detailLoading = true
+		updated, cmd := m.Update(pullRequestDetailsLoadedMsg{
+			requestID: m.detailRequestID,
+			key:       m.detailKey,
+			details: githubapi.PullRequestDetails{
+				PullRequest:    githubapi.PullRequest{Number: 42, Repository: "octo/project", State: "open"},
+				MergeableState: "behind",
+			},
+		})
+		m = updated.(model)
+		if attempt < 5 && (cmd == nil || !m.branchUpdateChecking) {
+			t.Fatalf("check %d did not continue polling: state=%+v command=%v", attempt, m, cmd != nil)
+		}
+		if attempt == 5 && (cmd != nil || m.branchUpdateChecking || !strings.Contains(m.branchUpdateNotice, "still reports behind")) {
+			t.Fatalf("polling did not stop with behind guidance: state=%+v command=%v", m, cmd != nil)
+		}
+	}
+}
+
+func TestBranchUpdatePromptFitsReviewPaneSizes(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{30, 10}, {45, 16}, {80, 24}, {120, 24}} {
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			m := initialModel()
+			m.width, m.height = size.width, size.height
+			m.detailOpen = true
+			m.detailKey = "octo/project#42"
+			m.diffLoaded = true
+			m.prDetails = githubapi.PullRequestDetails{
+				PullRequest:    githubapi.PullRequest{Number: 42, Repository: "octo/project", State: "open"},
+				Head:           githubapi.PullRequestBranch{SHA: "head123"},
+				MergeableState: "behind",
+			}
+			view := m.View()
+			if !strings.Contains(view, "press u") {
+				t.Fatalf("behind-branch prompt is missing: %s", view)
+			}
+			if rows := strings.Count(view, "\n") + 1; rows > size.height {
+				t.Errorf("view uses %d rows, terminal has %d", rows, size.height)
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if width := lipgloss.Width(line); width > size.width {
+					t.Errorf("line width %d exceeds terminal: %q", width, line)
+				}
+			}
+		})
+	}
+}
+
 func TestMergeMethodChooserUsesVerticalNavigation(t *testing.T) {
 	m := initialModel()
 	m.detailOpen = true

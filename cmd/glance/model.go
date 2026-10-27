@@ -20,79 +20,85 @@ const dashboardLoadTimeout = 2 * time.Minute
 const defaultPRQuery = "is:pr is:open author:@me"
 
 type model struct {
-	width                int
-	height               int
-	activeSection        int
-	theme                string
-	themePickerOpen      bool
-	themePickerSelection int
-	themeConfigError     string
-	loading              bool
-	viewer               githubapi.User
-	apiError             string
-	pullRequests         []githubapi.PullRequest
-	selectedPR           int
-	issues               []githubapi.Issue
-	issueError           string
-	selectedIssue        int
-	notifications        []githubapi.Notification
-	notificationError    string
-	selectedNotification int
-	inboxPreviewFocus    bool
-	inboxPreviewScroll   int
-	inboxLines           []string
-	inboxLinesKey        string
-	inboxLinesWidth      int
-	query                string
-	searchDraft          string
-	searchCursor         int
-	searchOffset         int
-	searching            bool
-	showHelp             bool
-	helpScroll           int
-	paletteOpen          bool
-	paletteQuery         string
-	paletteSelection     int
-	requestID            int
-	prRequestID          int
-	prLoading            bool
-	detailOpen           bool
-	detailLoading        bool
-	detailRequestID      int
-	detailKey            string
-	detailError          string
-	detailScroll         int
-	detailLines          []string
-	detailLinesWidth     int
-	reviewFiles          []reviewFileAnchor
-	reviewedFiles        map[string]reviewedFileSnapshot
-	diffFileSnapshots    []reviewedFileSnapshot
-	pendingReviewPath    string
-	pendingReviewOffset  int
-	filePickerOpen       bool
-	filePickerQuery      string
-	filePickerSelection  int
-	sidebarScroll        int
-	sidebarFocus         bool
-	prDetails            githubapi.PullRequestDetails
-	previewCache         map[string]githubapi.PullRequestDetails
-	previewErrors        map[string]string
-	previewPending       map[string]bool
-	previewOrder         []string
-	previewEpoch         int
-	diffLoading          bool
-	diffLoaded           bool
-	diffRequestID        int
-	diffError            string
-	diffFiles            []githubapi.PullRequestFile
-	mergeDialog          mergeDialogState
-	mergeMethodIndex     int
-	mergeMethod          githubapi.MergeMethod
-	mergeInProgress      bool
-	mergeRequestID       int
-	mergeError           string
-	mergeNotice          string
-	client               *githubapi.Client
+	width                  int
+	height                 int
+	activeSection          int
+	theme                  string
+	themePickerOpen        bool
+	themePickerSelection   int
+	themeConfigError       string
+	loading                bool
+	viewer                 githubapi.User
+	apiError               string
+	pullRequests           []githubapi.PullRequest
+	selectedPR             int
+	issues                 []githubapi.Issue
+	issueError             string
+	selectedIssue          int
+	notifications          []githubapi.Notification
+	notificationError      string
+	selectedNotification   int
+	inboxPreviewFocus      bool
+	inboxPreviewScroll     int
+	inboxLines             []string
+	inboxLinesKey          string
+	inboxLinesWidth        int
+	query                  string
+	searchDraft            string
+	searchCursor           int
+	searchOffset           int
+	searching              bool
+	showHelp               bool
+	helpScroll             int
+	paletteOpen            bool
+	paletteQuery           string
+	paletteSelection       int
+	requestID              int
+	prRequestID            int
+	prLoading              bool
+	detailOpen             bool
+	detailLoading          bool
+	detailRequestID        int
+	detailKey              string
+	detailError            string
+	detailScroll           int
+	detailLines            []string
+	detailLinesWidth       int
+	reviewFiles            []reviewFileAnchor
+	reviewedFiles          map[string]reviewedFileSnapshot
+	diffFileSnapshots      []reviewedFileSnapshot
+	pendingReviewPath      string
+	pendingReviewOffset    int
+	filePickerOpen         bool
+	filePickerQuery        string
+	filePickerSelection    int
+	sidebarScroll          int
+	sidebarFocus           bool
+	prDetails              githubapi.PullRequestDetails
+	previewCache           map[string]githubapi.PullRequestDetails
+	previewErrors          map[string]string
+	previewPending         map[string]bool
+	previewOrder           []string
+	previewEpoch           int
+	diffLoading            bool
+	diffLoaded             bool
+	diffRequestID          int
+	diffError              string
+	diffFiles              []githubapi.PullRequestFile
+	mergeDialog            mergeDialogState
+	mergeMethodIndex       int
+	mergeMethod            githubapi.MergeMethod
+	mergeInProgress        bool
+	mergeRequestID         int
+	mergeError             string
+	mergeNotice            string
+	branchUpdateInProgress bool
+	branchUpdateChecking   bool
+	branchUpdateRequestID  int
+	branchUpdatePolls      int
+	branchUpdateNotice     string
+	branchUpdateError      string
+	client                 *githubapi.Client
 }
 
 type dashboardLoadedMsg struct {
@@ -133,6 +139,18 @@ type pullRequestMergedMsg struct {
 	key       string
 	result    githubapi.MergeResult
 	err       error
+}
+
+type pullRequestBranchUpdatedMsg struct {
+	requestID int
+	key       string
+	result    githubapi.BranchUpdateResult
+	err       error
+}
+
+type branchUpdateCheckMsg struct {
+	requestID int
+	key       string
 }
 
 type mergeDialogState int
@@ -212,12 +230,18 @@ func (m *model) openSelectedPullRequest() tea.Cmd {
 	}
 	pr := items[m.selectedPR]
 	m.detailKey = fmt.Sprintf("%s#%d", pr.Repository, pr.Number)
+	m.branchUpdateRequestID++
 	m.detailOpen = true
 	m.detailLoading = true
 	m.detailError = ""
 	m.prDetails = githubapi.PullRequestDetails{}
 	m.mergeError = ""
 	m.mergeNotice = ""
+	m.branchUpdateInProgress = false
+	m.branchUpdateChecking = false
+	m.branchUpdatePolls = 0
+	m.branchUpdateNotice = ""
+	m.branchUpdateError = ""
 	m.mergeDialog = noMergeDialog
 	m.mergeInProgress = false
 	m.detailScroll = 0
@@ -283,6 +307,26 @@ func (m *model) mergePullRequest(method githubapi.MergeMethod) tea.Cmd {
 		defer cancel()
 		result, err := client.MergePullRequest(ctx, owner, repository, number, method, sha)
 		return pullRequestMergedMsg{requestID: requestID, key: key, result: result, err: err}
+	}
+}
+
+func (m *model) updatePullRequestBranch() tea.Cmd {
+	m.branchUpdateRequestID++
+	requestID, key, sha, client := m.branchUpdateRequestID, m.detailKey, m.prDetails.Head.SHA, m.client
+	owner, repository, number, err := parsePullRequestKey(key)
+	m.branchUpdateInProgress = true
+	m.branchUpdateChecking = false
+	m.branchUpdatePolls = 0
+	m.branchUpdateNotice = ""
+	m.branchUpdateError = ""
+	return func() tea.Msg {
+		if err != nil {
+			return pullRequestBranchUpdatedMsg{requestID: requestID, key: key, err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dashboardLoadTimeout)
+		defer cancel()
+		result, err := client.UpdatePullRequestBranch(ctx, owner, repository, number, sha)
+		return pullRequestBranchUpdatedMsg{requestID: requestID, key: key, result: result, err: err}
 	}
 }
 
@@ -372,6 +416,10 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.jumpToReviewFile(0)
 	case "v":
 		m.toggleReviewedFile()
+	case "u":
+		if m.canUpdateBranch() {
+			return m, m.updatePullRequestBranch()
+		}
 	case "up", "k":
 		if m.sidebarFocus {
 			m.sidebarScroll = max(0, m.sidebarScroll-1)
@@ -414,6 +462,10 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r", "R":
 		if !m.detailLoading && !m.diffLoading {
+			if !m.branchUpdateChecking {
+				m.branchUpdateNotice = ""
+				m.branchUpdateError = ""
+			}
 			if path, offset := m.reviewPosition(); path != "" {
 				m.pendingReviewPath, m.pendingReviewOffset = path, offset
 			}
@@ -430,6 +482,8 @@ func (m model) updatePullRequestDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "m", "M":
 		switch {
+		case m.branchUpdateInProgress || m.branchUpdateChecking:
+			m.mergeError = "Wait for the branch update to finish before merging."
 		case m.detailLoading:
 			m.mergeError = "Wait for the pull request details to finish loading before merging."
 		case m.detailError != "":
@@ -619,6 +673,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailLoading = false
 		if msg.err != nil {
 			m.detailError = safeText(msg.err.Error())
+			if m.branchUpdateChecking {
+				m.branchUpdateChecking = false
+				m.branchUpdateNotice = ""
+				m.branchUpdateError = "Could not verify branch update: " + m.detailError
+			}
 			m.detailLines = nil
 			m.cacheDetailLines()
 			m.restoreReviewPosition(file, offset)
@@ -626,6 +685,28 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.prDetails = msg.details
+		var branchUpdateCmd tea.Cmd
+		if m.branchUpdateChecking {
+			state := strings.ToLower(strings.TrimSpace(msg.details.MergeableState))
+			switch state {
+			case "", "unknown", "behind":
+				m.branchUpdatePolls++
+				if m.branchUpdatePolls < 5 {
+					m.branchUpdateNotice = "GitHub accepted the update; waiting for branch status…"
+					branchUpdateCmd = scheduleBranchUpdateCheck(m.branchUpdateRequestID, m.detailKey)
+				} else {
+					m.branchUpdateChecking = false
+					if state == "behind" {
+						m.branchUpdateNotice = "Branch still reports behind. Press r to check again."
+					} else {
+						m.branchUpdateNotice = "Branch status is still being calculated. Press r to check again."
+					}
+				}
+			default:
+				m.branchUpdateChecking = false
+				m.branchUpdateNotice = branchUpdateStatus(state)
+			}
+		}
 		m.storePRPreview(msg.key, msg.details)
 		m.detailError = ""
 		m.detailLines = nil
@@ -633,6 +714,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.restoreReviewPosition(file, offset)
 		m.detailScroll = min(m.detailScroll, m.maxDetailScroll())
 		m.sidebarScroll = min(m.sidebarScroll, m.maxSidebarScroll())
+		if branchUpdateCmd != nil {
+			return m, branchUpdateCmd
+		}
 	case pullRequestFilesLoadedMsg:
 		if msg.requestID != m.diffRequestID || msg.key != m.detailKey {
 			break
@@ -682,6 +766,37 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailLines = nil
 		m.cacheDetailLines()
 		return m, tea.Batch(m.loadDashboard(), m.loadPullRequestDetails())
+	case pullRequestBranchUpdatedMsg:
+		if msg.requestID != m.branchUpdateRequestID || msg.key != m.detailKey {
+			break
+		}
+		m.branchUpdateInProgress = false
+		if msg.err != nil {
+			m.branchUpdateError = safeText(msg.err.Error())
+			m.branchUpdateNotice = ""
+			break
+		}
+		m.branchUpdateError = ""
+		m.branchUpdateNotice = safeText(msg.result.Message)
+		if m.branchUpdateNotice == "" {
+			m.branchUpdateNotice = "GitHub accepted the branch update; checking status…"
+		}
+		m.branchUpdatePolls = 0
+		m.branchUpdateChecking = true
+		return m, scheduleBranchUpdateCheck(msg.requestID, msg.key)
+	case branchUpdateCheckMsg:
+		if msg.requestID != m.branchUpdateRequestID || msg.key != m.detailKey || !m.branchUpdateChecking {
+			break
+		}
+		if !m.detailOpen {
+			m.branchUpdateChecking = false
+			break
+		}
+		if m.detailLoading || m.diffLoading || m.mergeInProgress || m.mergeDialog != noMergeDialog {
+			return m, scheduleBranchUpdateCheck(msg.requestID, msg.key)
+		}
+		updated, cmd := m.Update(keyForPalette("r"))
+		return updated, cmd
 	case autoRefreshMsg:
 		nextRefresh := scheduleAutoRefresh()
 		if m.loading || m.prLoading || m.mergeInProgress || m.mergeDialog != noMergeDialog {

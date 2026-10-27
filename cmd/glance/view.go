@@ -678,6 +678,25 @@ func (m model) mergeActionPanel(width int) []string {
 	if m.mergeNotice != "" {
 		lines = append(lines, panelMessage(m.mergeNotice, width, goodStyle)...)
 	}
+	branchLines := make([]string, 0, 4)
+	if m.branchUpdateError != "" {
+		branchLines = append(branchLines, panelMessage("Branch update: "+m.branchUpdateError, width, errorStyle)...)
+	}
+	if m.branchUpdateNotice != "" {
+		style := goodStyle
+		if m.branchUpdateChecking {
+			style = warnStyle
+		}
+		branchLines = append(branchLines, panelMessage(m.branchUpdateNotice, width, style)...)
+	}
+	if m.branchUpdateInProgress {
+		branchLines = append(branchLines, "  "+warnStyle.Render(clipLine("UPDATING BRANCH  ·  Waiting for GitHub…", width)))
+	} else if m.branchUpdateChecking {
+		branchLines = append(branchLines, "  "+warnStyle.Render(clipLine("CHECKING BRANCH STATUS…", width)))
+	} else if m.canUpdateBranch() {
+		branchLines = append(branchLines, "  "+warnStyle.Render(clipLine(branchUpdatePrompt(width), width)))
+	}
+	lines = append(lines, branchLines...)
 	if m.mergeInProgress || m.mergeDialog != noMergeDialog || len(lines) > 0 {
 		lines = append([]string{"  " + mutedStyle.Render(strings.Repeat("─", width))}, lines...)
 	}

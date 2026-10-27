@@ -240,6 +240,42 @@ func TestMergePullRequestExplainsGitHubFailures(t *testing.T) {
 	}
 }
 
+func TestUpdatePullRequestBranchUsesExpectedHeadSHA(t *testing.T) {
+	runner := &stubRunner{stdout: []byte(`{"message":"Updating pull request branch.","url":"https://api.github.com/repos/octo/project/pulls/42/update-branch"}`)}
+	result, err := NewClientWithRunner(runner).UpdatePullRequestBranch(context.Background(), "octo", "project", 42, "head123")
+	if err != nil {
+		t.Fatalf("UpdatePullRequestBranch() error = %v", err)
+	}
+	if result.Message != "Updating pull request branch." {
+		t.Fatalf("UpdatePullRequestBranch() = %+v", result)
+	}
+	want := [][]string{{"api", "-X", "PUT", "-F", "expected_head_sha=head123", "repos/octo/project/pulls/42/update-branch"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Errorf("gh calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestUpdatePullRequestBranchRejectsInvalidReferenceOrHead(t *testing.T) {
+	runner := &stubRunner{}
+	client := NewClientWithRunner(runner)
+	for _, tc := range []struct {
+		owner, repository string
+		number            int
+		sha               string
+	}{
+		{"owner/repo", "repo", 42, "head"},
+		{"owner", "repo", 0, "head"},
+		{"owner", "repo", 42, "  "},
+	} {
+		if _, err := client.UpdatePullRequestBranch(context.Background(), tc.owner, tc.repository, tc.number, tc.sha); err == nil {
+			t.Errorf("UpdatePullRequestBranch(%q, %q, %d, %q) error = nil", tc.owner, tc.repository, tc.number, tc.sha)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("invalid branch update invoked gh: %#v", runner.calls)
+	}
+}
+
 func TestListRepositoriesUsesPaginationAndAllAffiliations(t *testing.T) {
 	runner := &stubRunner{stdout: []byte(`[[{"name":"one","full_name":"octo/one","owner":{"login":"octo"}}],[{"name":"two","full_name":"octo/two","owner":{"login":"octo"}}]]`)}
 	repositories, err := NewClientWithRunner(runner).ListRepositories(context.Background())
