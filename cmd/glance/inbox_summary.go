@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"unicode"
 
 	"glance/internal/githubapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const reviewRequestedQuery = "is:pr is:open review-requested:@me"
@@ -26,24 +28,34 @@ func ownedRepositoriesPRQuery(login string) (string, bool) {
 }
 
 func checkSummary(details githubapi.PullRequestDetails) string {
+	text, _ := checkSummaryStatus(details)
+	return text
+}
+
+func checkSummaryStatus(details githubapi.PullRequestDetails) (string, lipgloss.Style) {
 	if details.ChecksError != "" {
-		return "? Checks unavailable"
-	}
-	pass, fail, running := 0, 0, 0
-	for _, check := range details.CheckRuns {
-		switch check.Conclusion {
-		case "success", "neutral", "skipped":
-			pass++
-		case "failure", "timed_out", "action_required", "cancelled", "startup_failure", "stale":
-			fail++
-		default:
-			running++
-		}
+		return "? Checks unavailable", errorStyle
 	}
 	if len(details.CheckRuns) == 0 {
-		return "No checks reported"
+		return "No checks reported", mutedStyle
 	}
-	return fmt.Sprintf("checks ✓%d ✕%d ◌%d", pass, fail, running)
+	counts := countCheckStatuses(details.CheckRuns)
+	labels := []string{"✓ PASS", "✕ FAIL", "! CANCEL", "◌ RUNNING", "– SKIP", "? UNKNOWN"}
+	parts := []string{"checks"}
+	for _, label := range labels {
+		if counts[label] == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s%d", strings.Fields(label)[0], counts[label]))
+	}
+	text := strings.Join(parts, " ")
+	style := goodStyle
+	if counts["✕ FAIL"] > 0 {
+		style = errorStyle
+	} else if counts["! CANCEL"]+counts["◌ RUNNING"] > 0 {
+		style = warnStyle
+	}
+	return text, style
 }
 
 func (m model) pullRequestToolbar(width int) []string {
